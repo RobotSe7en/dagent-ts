@@ -174,6 +174,10 @@ describe('static DAG control flow', () => {
         output: { type: 'dagent_content_reference' },
         valueReference: { type: 'dagent_content_reference' },
       });
+      const parentResult = outcome.state.nodeResults['produce_all'];
+      expect(Buffer.byteLength(parentResult?.content ?? '', 'utf8')).toBeLessThan(1_024);
+      expect(parentResult?.content).not.toContain('z'.repeat(5_000));
+      expect(JSON.stringify(outcome.checkpoint)).not.toContain('z'.repeat(5_000));
     } finally {
       await runner.close();
     }

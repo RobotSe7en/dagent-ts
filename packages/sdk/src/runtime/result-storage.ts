@@ -40,9 +40,10 @@ export async function normalizeCapabilityResult(
   await mkdir(resultRoot, { recursive: true });
   const references: ContentReference[] = [...result.artifacts];
 
-  const contentBytes = Buffer.from(result.content, 'utf8');
-  let storedContent: StoredContent = inlineContent(result.content);
-  let normalizedContent = result.content;
+  const effectiveContent = capabilityResultContent(result);
+  const contentBytes = Buffer.from(effectiveContent, 'utf8');
+  let storedContent: StoredContent = inlineContent(effectiveContent);
+  let normalizedContent = effectiveContent;
   if (contentBytes.byteLength > policy.maxInlineBytes) {
     const reference = await writeReference({
       root: resultRoot,
@@ -50,7 +51,7 @@ export async function normalizeCapabilityResult(
       filename: `${result.invocationId}-content.txt`,
       data: contentBytes,
       mediaType: 'text/plain; charset=utf-8',
-      preview: headTailPreview(result.content),
+      preview: headTailPreview(effectiveContent, previewLimit(policy)),
     });
     references.push(reference);
     storedContent = reference;
@@ -68,7 +69,7 @@ export async function normalizeCapabilityResult(
         filename: `${result.invocationId}-value.json`,
         data: encoded,
         mediaType: 'application/json',
-        preview: headTailPreview(encoded.toString('utf8')),
+        preview: headTailPreview(encoded.toString('utf8'), previewLimit(policy)),
       });
       references.push(reference);
       valueReference = reference;
@@ -88,6 +89,17 @@ export async function normalizeCapabilityResult(
     ...(valueReference === undefined ? {} : { valueReference }),
     ...(result.output === undefined ? {} : { originalOutput: result.output }),
   };
+}
+
+function capabilityResultContent(result: CapabilityResult): string {
+  if (result.content.length > 0) return result.content;
+  if (result.status === 'failed') {
+    return `[TOOL_ERROR] ${result.error ?? `Capability '${result.capabilityId}' failed.`}`;
+  }
+  if (result.status === 'cancelled') {
+    return `[TOOL_CANCELLED] ${result.error ?? `Capability '${result.capabilityId}' was cancelled.`}`;
+  }
+  return '';
 }
 
 export type StoredJsonValue = {
@@ -121,7 +133,7 @@ export async function externalizeJsonValue(
     filename: `${options.key}-value.json`,
     data: encoded,
     mediaType: 'application/json',
-    preview: headTailPreview(encoded.toString('utf8')),
+    preview: headTailPreview(encoded.toString('utf8'), previewLimit(policy)),
   });
   return { value: asJsonValue(reference), reference };
 }
@@ -199,6 +211,10 @@ function headTailPreview(text: string, limit = 8192): string {
   if (text.length <= limit) return text;
   const head = Math.floor(limit * 0.7);
   return `${text.slice(0, head)}\n...[EXTERNALIZED]...\n${text.slice(-(limit - head))}`;
+}
+
+function previewLimit(policy: ResultStoragePolicy): number {
+  return Math.min(8192, Math.max(256, Math.floor(policy.maxInlineBytes / 2)));
 }
 
 function mediaTypeFromExtension(extension: string): string {

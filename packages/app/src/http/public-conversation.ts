@@ -25,8 +25,25 @@ export function publicConversation(conversation: Conversation) {
 }
 
 export function publicConversationState(conversation: ReturnType<typeof requireConversationState>) {
+  const { summary } = conversation;
   return {
     ...conversation,
+    ...(summary === undefined
+      ? {}
+      : {
+          summary: {
+            content: summary.content,
+            sourceItemCount: summary.sourceItemCount,
+            method: summary.method,
+            ...(summary.fallbackReason === undefined
+              ? {}
+              : { fallbackReason: summary.fallbackReason }),
+            sourceTruncated: summary.sourceTruncated,
+            outputTruncated: summary.outputTruncated,
+            ...(summary.usage === undefined ? {} : { usage: summary.usage }),
+            ...(summary.contextUsage === undefined ? {} : { contextUsage: summary.contextUsage }),
+          },
+        }),
     items: conversation.items
       .filter((item) => item.visibility === 'user')
       .map(publicConversationItem),

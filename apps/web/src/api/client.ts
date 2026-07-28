@@ -32,8 +32,20 @@ export type ConversationSummary = {
   readonly updatedAt: string;
 };
 
+export type PublicConversationItem =
+  | Extract<ConversationState['items'][number], { type: 'user' | 'tool-result' }>
+  | Omit<
+      Extract<ConversationState['items'][number], { type: 'assistant' }>,
+      'reasoning' | 'toolCalls'
+    >;
+
+export type PublicConversationState = Omit<ConversationState, 'summary' | 'items'> & {
+  readonly summary?: Omit<NonNullable<ConversationState['summary']>, 'reasoning'>;
+  readonly items: readonly PublicConversationItem[];
+};
+
 export type Conversation = ConversationSummary & {
-  readonly conversation: ConversationState;
+  readonly conversation: PublicConversationState;
 };
 
 export type StoredRun = {

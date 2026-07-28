@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ConversationItem, RunEvent, RunTarget } from 'dagent-ai';
+import type { RunEvent, RunTarget } from 'dagent-ai';
 import {
   Bot,
   CircleStop,
@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { api, subscribeRun } from '../../api/client.js';
+import { api, type PublicConversationItem, subscribeRun } from '../../api/client.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { useWorkspace } from '../../state/workspace.js';
 
@@ -126,9 +126,10 @@ export function ChatWorkspace() {
 
   const items =
     conversation.data?.conversation.items.filter(
-      (item): item is Exclude<ConversationItem, { type: 'tool-result' }> =>
+      (item): item is Exclude<PublicConversationItem, { type: 'tool-result' }> =>
         item.visibility === 'user' && item.type !== 'tool-result',
     ) ?? [];
+  const summary = conversation.data?.conversation.summary;
 
   return (
     <section className="chat-workspace">
@@ -143,7 +144,7 @@ export function ChatWorkspace() {
         </div>
       </header>
       <div className="message-scroll" ref={scrollRef}>
-        {items.length === 0 && streamedContent === '' ? (
+        {items.length === 0 && summary === undefined && streamedContent === '' ? (
           <div className="conversation-welcome">
             <div className="welcome-orbit">
               <Bot size={31} />
@@ -155,6 +156,12 @@ export function ChatWorkspace() {
           </div>
         ) : (
           <div className="message-list">
+            {summary === undefined ? null : (
+              <aside className="conversation-summary">
+                <strong>Earlier conversation</strong>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary.content}</ReactMarkdown>
+              </aside>
+            )}
             {items.map((item) => (
               <Message key={item.id} item={item} />
             ))}
@@ -164,9 +171,7 @@ export function ChatWorkspace() {
                   id: 'streaming',
                   type: 'assistant',
                   content: streamedContent,
-                  reasoning: '',
                   refusal: '',
-                  toolCalls: [],
                   scope: 'conversation',
                   visibility: 'user',
                 }}
@@ -264,7 +269,7 @@ export function ChatWorkspace() {
 }
 
 function Message(props: {
-  readonly item: Exclude<ConversationItem, { type: 'tool-result' }>;
+  readonly item: Exclude<PublicConversationItem, { type: 'tool-result' }>;
   readonly streaming?: boolean;
 }) {
   const assistant = props.item.type === 'assistant';

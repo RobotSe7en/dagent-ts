@@ -341,7 +341,10 @@ export class DagExecutor {
         });
         persistedOutput = stored.value;
         valueReference = stored.reference;
-        if (stored.reference !== undefined) references = [stored.reference];
+        if (stored.reference !== undefined) {
+          references = [stored.reference];
+          content = stored.reference.preview;
+        }
       }
       return {
         result: dagNodeResultSchema.parse({

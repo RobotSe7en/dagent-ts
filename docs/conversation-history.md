@@ -9,7 +9,8 @@ V3 只持久化一个完整、有界的 `ConversationState`。它同时包含用
 工具调用结果，以及 planner、validator 等内部审计项。`scope` 和 `visibility` 决定用途：
 
 - ContextAssembler 从该文档生成 provider 输入，但永不回放 reasoning；
-- HTTP 层只返回 `visibility=user` 的项，并移除助手 reasoning 与 tool calls；
+- HTTP 层返回独立的 `PublicConversationState` 投影：只保留 `visibility=user` 的项，
+  移除助手 reasoning、tool calls 和压缩器 reasoning；
 - `ContextUsage` 作为 run checkpoint/事件审计保存，不再拆成第二份会话历史。
 
 会话项是判别联合：
@@ -25,6 +26,8 @@ provider 适配发生在最后一步，因此 OpenAI 兼容字段不会污染持
 `AssistantMessage.reasoning` 可存储 provider 返回的 reasoning 字段或 think 标签内容。
 它属于内部审计数据。ContextAssembler 不会把它投影回模型请求，公共 HTTP 投影也不会
 返回它，避免隐藏推理被递归放大或意外暴露。
+Web 可展示压缩后的早期上下文内容，但它消费的是上述公共摘要类型，而不是内部
+`ContextSummary`。
 
 ## 上下文压缩
 

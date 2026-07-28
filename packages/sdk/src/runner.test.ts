@@ -228,6 +228,133 @@ describe('Runner tool agent', () => {
     await runner.close();
   });
 
+  it('records a reviewed handler exception as a failed tool result and lets the model recover', async () => {
+    const failing = tool({
+      id: 'tool.reviewed-failure',
+      input: z.object({}).strict(),
+      output: z.string(),
+      risk: 'high',
+      execute: () => {
+        throw new Error('reviewed handler exploded');
+      },
+    });
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-reviewed-failure', name: failing.definition.id, arguments: {} }],
+      },
+      {
+        content: 'The reviewed operation failed safely.',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [],
+      },
+    ]);
+    const runner = new Runner({ provider, capabilities: [failing] });
+    const agent = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'reviewed-failure-agent',
+      name: 'Reviewed failure agent',
+      systemPrompt: 'Report capability failures.',
+      scope: { capabilities: [failing.definition.id] },
+      reviewLevel: 'risky',
+    });
+    const pending = await runner.run(agent, { prompt: 'Run it.' });
+    expect(pending.status).toBe('awaiting-review');
+    if (pending.status !== 'awaiting-review') return;
+
+    const completed = await runner.resume(pending.checkpoint, {
+      reviewId: pending.review.id,
+      revision: pending.review.revision,
+      action: 'approve',
+      reason: '',
+    });
+
+    expect(completed.status).toBe('completed');
+    expect(
+      completed.state.conversation?.items.find(
+        (item) => item.type === 'tool-result' && item.callId === 'call-reviewed-failure',
+      ),
+    ).toMatchObject({
+      status: 'failed',
+      content: {
+        type: 'inline',
+        text: '[TOOL_ERROR] reviewed handler exploded',
+      },
+    });
+    expect(provider.requests[1]?.messages.at(-1)).toMatchObject({
+      role: 'tool',
+      toolCallId: 'call-reviewed-failure',
+      content: '[TOOL_ERROR] reviewed handler exploded',
+    });
+    await runner.close();
+  });
+
+  it('retains frozen model limits when a resumed run reaches another review gate', async () => {
+    const write = tool({
+      id: 'tool.reviewed-write',
+      input: z.object({ value: z.string() }).strict(),
+      output: z.string(),
+      risk: 'high',
+      execute: ({ value }) => value,
+    });
+    class MutableLimitsProvider extends MockProvider {
+      public contextWindowTokens = 16_384;
+      public outputReserveTokens = 2048;
+    }
+    const provider = new MutableLimitsProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-first', name: write.definition.id, arguments: { value: 'first' } }],
+      },
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [
+          { id: 'call-second', name: write.definition.id, arguments: { value: 'second' } },
+        ],
+      },
+    ]);
+    const runner = new Runner({ provider, capabilities: [write] });
+    const agent = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'repeated-review-agent',
+      name: 'Repeated review agent',
+      systemPrompt: 'Use the reviewed tool twice.',
+      scope: { capabilities: [write.definition.id] },
+      reviewLevel: 'risky',
+    });
+    const first = await runner.run(agent, { prompt: 'Write twice.' });
+    expect(first.status).toBe('awaiting-review');
+    if (first.status !== 'awaiting-review') return;
+    expect(first.checkpoint.plan).toMatchObject({
+      contextWindowTokens: 16_384,
+      outputReserveTokens: 2048,
+    });
+
+    provider.contextWindowTokens = 4096;
+    provider.outputReserveTokens = 512;
+    const second = await runner.resume(first.checkpoint, {
+      reviewId: first.review.id,
+      revision: first.review.revision,
+      action: 'approve',
+      reason: '',
+    });
+
+    expect(second.status).toBe('awaiting-review');
+    if (second.status !== 'awaiting-review') return;
+    expect(second.checkpoint.plan).toMatchObject({
+      contextWindowTokens: 16_384,
+      outputReserveTokens: 2048,
+    });
+    await runner.close();
+  });
+
   it('repairs one invalid dynamic plan without retaining the rejected payload', async () => {
     const graph = {
       schemaVersion: 1 as const,

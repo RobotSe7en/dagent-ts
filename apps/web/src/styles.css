@@ -490,6 +490,28 @@ textarea:focus-visible {
   padding: 25px 0 20px;
 }
 
+.conversation-summary {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.conversation-summary strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.conversation-summary > :last-child {
+  margin-bottom: 0;
+}
+
 .message {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
