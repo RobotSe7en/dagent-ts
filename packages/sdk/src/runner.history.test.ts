@@ -92,11 +92,11 @@ describe('Runner conversation history', () => {
       { type: 'user', content: 'Second question.' },
       { type: 'assistant', content: 'Second answer.' },
     ]);
-    expect(second.state.modelThread?.items).toHaveLength(4);
+    expect(second.state.conversation?.items).toHaveLength(4);
     expect(first.state.conversation?.items.find((item) => item.type === 'assistant')).toMatchObject(
       { reasoning: 'First private reasoning.' },
     );
-    expect(second.state.modelThread).toEqual(second.state.conversation);
+    expect(second.state).not.toHaveProperty('modelThread');
     expect(second.state.contextUsage).toHaveLength(1);
     expect(provider.requests[1]?.messages).toEqual(
       expect.arrayContaining([
@@ -196,7 +196,7 @@ describe('Runner conversation history', () => {
       },
       { type: 'assistant', scope: 'conversation', content: 'echo:Second dynamic request.' },
     ]);
-    expect(second.state.modelThread?.items).toHaveLength(6);
+    expect(second.state.conversation?.items).toHaveLength(6);
     expect(second.state.contextUsage).toHaveLength(1);
     const secondRequest = JSON.stringify(provider.requests[1]);
     expect(secondRequest).toContain('First dynamic request.');

@@ -14,10 +14,10 @@ import type { ChatProvider, ChatRequest } from './provider.js';
 import { ThinkingStreamParser } from './thinking-parser.js';
 
 export type ReasoningOptions = {
-  readonly enabled?: boolean;
-  readonly effort?: OpenAI.Chat.Completions.ChatCompletionReasoningEffort;
-  readonly budgetTokens?: number;
-  readonly capture?: 'field' | 'field-and-tags';
+  readonly enabled?: boolean | undefined;
+  readonly effort?: OpenAI.Chat.Completions.ChatCompletionReasoningEffort | undefined;
+  readonly budgetTokens?: number | undefined;
+  readonly capture?: 'field' | 'field-and-tags' | undefined;
 };
 
 export type OpenAICompatibleProviderOptions = {
@@ -27,8 +27,10 @@ export type OpenAICompatibleProviderOptions = {
   readonly apiKeyEnv?: string;
   readonly timeoutMs?: number;
   readonly reasoning?: ReasoningOptions;
+  readonly streamIncludeUsage?: boolean;
   readonly contextWindowTokens?: number;
   readonly outputReserveTokens?: number;
+  readonly extraRequestArgs?: JsonObject;
   readonly extraBody?: JsonObject;
   readonly defaultHeaders?: Readonly<Record<string, string>>;
   readonly client?: OpenAI;
@@ -114,7 +116,7 @@ export class OpenAICompatibleProvider implements ChatProvider {
         this.#streamingRequest(request),
         options.signal === undefined ? undefined : { signal: options.signal },
       );
-      const parser = new ThinkingStreamParser(this.#captureTags);
+      const parser = new ThinkingStreamParser();
       let content = '';
       let reasoningContent = '';
       let refusal = '';
@@ -133,9 +135,15 @@ export class OpenAICompatibleProvider implements ChatProvider {
         }
         if (delta.content !== null && delta.content !== undefined && delta.content.length > 0) {
           for (const part of parser.feed(delta.content)) {
-            if (part.channel === 'reasoning') reasoningContent += part.content;
-            else content += part.content;
-            if (part.content.length > 0) yield { type: 'token', ...part };
+            if (part.channel === 'reasoning') {
+              if (this.#captureTags) {
+                reasoningContent += part.content;
+                if (part.content.length > 0) yield { type: 'token', ...part };
+              }
+            } else {
+              content += part.content;
+              if (part.content.length > 0) yield { type: 'token', ...part };
+            }
           }
         }
         refusal += readStringProperty(delta, 'refusal');
@@ -149,9 +157,15 @@ export class OpenAICompatibleProvider implements ChatProvider {
       }
 
       for (const part of parser.finish()) {
-        if (part.channel === 'reasoning') reasoningContent += part.content;
-        else content += part.content;
-        if (part.content.length > 0) yield { type: 'token', ...part };
+        if (part.channel === 'reasoning') {
+          if (this.#captureTags) {
+            reasoningContent += part.content;
+            if (part.content.length > 0) yield { type: 'token', ...part };
+          }
+        } else {
+          content += part.content;
+          if (part.content.length > 0) yield { type: 'token', ...part };
+        }
       }
       const toolCalls: ProviderToolCall[] = [...calls.entries()]
         .sort(([left], [right]) => left - right)
@@ -195,19 +209,19 @@ export class OpenAICompatibleProvider implements ChatProvider {
     return {
       ...this.#requestBase(request),
       stream: true,
-      stream_options: { include_usage: true },
+      ...(this.#options.streamIncludeUsage === true
+        ? { stream_options: { include_usage: true } }
+        : {}),
     } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
   }
 
   #requestBase(request: ChatRequest): Readonly<Record<string, unknown>> {
     const reasoning = this.#options.reasoning;
-    const extraBody: Record<string, unknown> = { ...this.#options.extraBody };
+    let extraBody: JsonObject = {};
     if (reasoning?.enabled !== undefined) {
-      extraBody['thinking'] = { type: reasoning.enabled ? 'enabled' : 'disabled' };
+      extraBody = { thinking: { type: reasoning.enabled ? 'enabled' : 'disabled' } };
     }
-    if (reasoning?.budgetTokens !== undefined) {
-      extraBody['thinking_token_budget'] = reasoning.budgetTokens;
-    }
+    extraBody = mergeJsonObjects(extraBody, this.#options.extraBody ?? {});
     return {
       model: this.#options.model,
       messages: request.messages.map(toOpenAIMessage),
@@ -223,21 +237,15 @@ export class OpenAICompatibleProvider implements ChatProvider {
               },
             })),
           }),
+      ...(reasoning?.effort === undefined ? {} : { reasoning_effort: reasoning.effort }),
+      ...(reasoning?.budgetTokens === undefined
+        ? {}
+        : { thinking_token_budget: reasoning.budgetTokens }),
+      ...(Object.keys(extraBody).length === 0 ? {} : { extra_body: extraBody }),
+      ...this.#options.extraRequestArgs,
       ...(request.responseFormat === undefined
         ? {}
-        : {
-            response_format: {
-              type: 'json_schema' as const,
-              json_schema: {
-                name: request.responseFormat.name,
-                description: request.responseFormat.description,
-                schema: request.responseFormat.schema,
-                strict: request.responseFormat.strict,
-              },
-            },
-          }),
-      ...(reasoning?.effort === undefined ? {} : { reasoning_effort: reasoning.effort }),
-      ...(Object.keys(extraBody).length === 0 ? {} : { extra_body: extraBody }),
+        : { response_format: { type: 'json_object' as const } }),
     };
   }
 }
@@ -273,11 +281,20 @@ function toOpenAIMessage(message: ChatMessage): OpenAI.Chat.Completions.ChatComp
 }
 
 function parseToolArguments(value: string): JsonObject {
+  let parsed: unknown;
   try {
-    return jsonObjectSchema.parse(JSON.parse(value));
+    parsed = JSON.parse(value || '{}') as unknown;
   } catch {
-    return {};
+    throw new DagentError('PROVIDER_FAILED', 'Model tool-call arguments are not valid JSON.');
   }
+  const result = jsonObjectSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new DagentError(
+      'PROVIDER_FAILED',
+      'Model tool-call arguments must decode to a JSON object.',
+    );
+  }
+  return result.data;
 }
 
 function readStringProperty(value: object, ...keys: readonly string[]): string {
@@ -294,15 +311,30 @@ function captureResponseContent(
   reasoning: string,
   captureTags: boolean,
 ): { readonly content: string; readonly reasoning: string } {
-  if (!captureTags || !content.includes('<think>')) return { content, reasoning };
+  if (!content.includes('<think>')) return { content, reasoning };
   const parser = new ThinkingStreamParser(true);
   let visible = '';
   let capturedReasoning = reasoning;
   for (const part of [...parser.feed(content), ...parser.finish()]) {
-    if (part.channel === 'reasoning') capturedReasoning += part.content;
-    else visible += part.content;
+    if (part.channel === 'reasoning') {
+      if (captureTags) capturedReasoning += part.content;
+    } else visible += part.content;
   }
   return { content: visible.trim(), reasoning: capturedReasoning };
+}
+
+function mergeJsonObjects(base: JsonObject, override: JsonObject): JsonObject {
+  const merged: Record<string, JsonObject[string]> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    merged[key] =
+      isJsonObject(current) && isJsonObject(value) ? mergeJsonObjects(current, value) : value;
+  }
+  return merged;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function modelUsage(value: unknown): ModelTokenUsage | undefined {

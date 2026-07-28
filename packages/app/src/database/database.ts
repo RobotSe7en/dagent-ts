@@ -2,7 +2,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
-import { Kysely, SqliteDialect } from 'kysely';
+import { Kysely, SqliteDialect, sql } from 'kysely';
 import { Migrator } from 'kysely/migration';
 
 import type { DatabaseSchema } from './schema.js';
@@ -276,6 +276,63 @@ async function migrate(database: AppDatabase): Promise<void> {
             },
             async down(db) {
               await db.schema.dropTable('template_capabilities').execute();
+            },
+          },
+          '009_v3_conversations': {
+            async up(db) {
+              await sql`
+                update conversations
+                set schema_version = case
+                  when json_valid(conversation_json)
+                    and json_extract(conversation_json, '$.schemaVersion') = 3
+                    and json_extract(conversation_json, '$.id') = id
+                  then 3
+                  else 0
+                end
+              `.execute(db);
+              await db.schema.alterTable('conversations').dropColumn('model_thread_json').execute();
+              await db.schema
+                .alterTable('conversations')
+                .dropColumn('context_usage_json')
+                .execute();
+            },
+            async down(db) {
+              await db.schema
+                .alterTable('conversations')
+                .addColumn('model_thread_json', 'text')
+                .execute();
+              await db.schema
+                .alterTable('conversations')
+                .addColumn('context_usage_json', 'text', (column) =>
+                  column.notNull().defaultTo('[]'),
+                )
+                .execute();
+            },
+          },
+          '010_provider_request_options': {
+            async up(db) {
+              await db.schema
+                .alterTable('model_providers')
+                .addColumn('stream_include_usage', 'integer', (column) =>
+                  column.notNull().defaultTo(0),
+                )
+                .execute();
+              await db.schema
+                .alterTable('model_providers')
+                .addColumn('extra_request_args_json', 'text', (column) =>
+                  column.notNull().defaultTo('{}'),
+                )
+                .execute();
+            },
+            async down(db) {
+              await db.schema
+                .alterTable('model_providers')
+                .dropColumn('extra_request_args_json')
+                .execute();
+              await db.schema
+                .alterTable('model_providers')
+                .dropColumn('stream_include_usage')
+                .execute();
             },
           },
         };

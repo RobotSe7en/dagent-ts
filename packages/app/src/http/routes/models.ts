@@ -26,6 +26,8 @@ const modelInputSchema = z
     contextWindowTokens: z.number().int().min(1024).default(128_000),
     outputReserveTokens: z.number().int().nonnegative().default(8192),
     reasoning: reasoningConfigSchema.optional(),
+    streamIncludeUsage: z.boolean().default(false),
+    extraRequestArgs: jsonObjectSchema.default({}),
     extraBody: jsonObjectSchema.default({}),
   })
   .strict()

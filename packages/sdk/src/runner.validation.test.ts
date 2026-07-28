@@ -58,11 +58,18 @@ describe('Runner result validation', () => {
       outcome.state.conversation?.items.filter(({ visibility }) => visibility === 'user'),
     ).toMatchObject([
       { type: 'user', content: 'Use evidence.', visibility: 'user' },
-      { type: 'assistant', content: 'first incomplete answer', visibility: 'user' },
       { type: 'assistant', content: 'corrected answer with evidence', visibility: 'user' },
     ]);
     expect(
-      outcome.state.modelThread?.items.some(
+      outcome.state.conversation?.items.some(
+        (item) =>
+          item.type === 'assistant' &&
+          item.content === 'first incomplete answer' &&
+          item.visibility === 'internal',
+      ),
+    ).toBe(true);
+    expect(
+      outcome.state.conversation?.items.some(
         (item) =>
           item.type === 'user' &&
           item.scope === 'validator' &&

@@ -73,7 +73,6 @@ export const runStateSchema = z
     ]),
     targetKind: z.enum(['tool-agent', 'dag-agent', 'auto-agent', 'static-dag']),
     conversation: conversationStateSchema.optional(),
-    modelThread: conversationStateSchema.optional(),
     contextUsage: z.array(contextUsageSchema).readonly().default([]),
     validations: z.array(validationRecordSchema).readonly().default([]),
     graphInput: jsonObjectSchema.default({}),

@@ -25,6 +25,10 @@ export function RunInspector() {
     },
     enabled: conversationId !== undefined && inspectorOpen,
   });
+  const contextUsages = runEvents.flatMap((event) =>
+    event.type === 'context-usage' ? [event.usage] : [],
+  );
+  const latestUsage = contextUsages.at(-1);
   if (!inspectorOpen) return null;
   return (
     <aside className="inspector">
@@ -72,20 +76,18 @@ export function RunInspector() {
               <span>{conversation.data?.conversation.items.length ?? 0} visible items</span>
             </div>
           </div>
-          {conversation.data?.contextUsage.at(-1) !== undefined ? (
+          {latestUsage !== undefined ? (
             <div className="usage-meter">
               <div>
                 <span>Estimated input</span>
-                <strong>{conversation.data.contextUsage.at(-1)?.estimatedInputTokens ?? 0}</strong>
+                <strong>{latestUsage.estimatedInputTokens}</strong>
               </div>
               <div className="meter-track">
                 <span
                   style={{
                     width: `${Math.min(
                       100,
-                      ((conversation.data.contextUsage.at(-1)?.estimatedInputTokens ?? 0) /
-                        (conversation.data.contextUsage.at(-1)?.contextWindowTokens ?? 1)) *
-                        100,
+                      (latestUsage.estimatedInputTokens / latestUsage.contextWindowTokens) * 100,
                     )}%`,
                   }}
                 />
@@ -96,11 +98,11 @@ export function RunInspector() {
             <details>
               <summary>Context boundary</summary>
               <p className="muted-copy">
-                私有模型线程、工具结果和验证器续写只在运行时与数据库内部使用，不通过公共 HTTP API
-                返回。
+                V3 会话在服务端保留完整审计项；公共 API
+                只返回用户可见消息，并移除推理和工具调用参数。
               </p>
             </details>
-            {conversation.data?.contextUsage.map((usage, index) => (
+            {contextUsages.map((usage, index) => (
               <details key={`${usage.estimatedInputTokens}-${index}`}>
                 <summary>
                   Context #{index + 1} · {usage.compactionMethod}

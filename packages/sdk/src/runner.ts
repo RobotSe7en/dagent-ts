@@ -379,9 +379,6 @@ export class Runner implements AsyncDisposable {
             ...(checkpoint.state.conversation === undefined
               ? {}
               : { conversation: checkpoint.state.conversation }),
-            ...(checkpoint.state.modelThread === undefined
-              ? {}
-              : { modelThread: checkpoint.state.modelThread }),
           },
           context,
           { invocation: review.invocation, decision },
@@ -473,9 +470,6 @@ export class Runner implements AsyncDisposable {
       targetKind: target.kind,
       ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
         ? { conversation: preparedInput.conversation }
-        : {}),
-      ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
-        ? { modelThread: preparedInput.conversation }
         : {}),
       graphInput: isAgentInput(preparedInput) ? {} : (preparedInput.graphInput ?? {}),
       nodeResults: {},
@@ -592,7 +586,6 @@ export class Runner implements AsyncDisposable {
         ...currentState,
         status: 'planning',
         conversation: planned.conversation,
-        modelThread: planned.modelThread,
         contextUsage: usages,
         graph: planned.proposal.graph,
         graphInput: { prompt: input.prompt },
@@ -627,7 +620,6 @@ export class Runner implements AsyncDisposable {
           {
             prompt: input.prompt,
             conversation: planned.conversation,
-            modelThread: planned.modelThread,
             previousGraph: planned.proposal.graph,
             failure: errorMessage(error),
             completedNodeIds: Object.keys(completedResults),
@@ -694,7 +686,6 @@ export class Runner implements AsyncDisposable {
       );
     }
     let conversation = state.conversation;
-    let modelThread = state.modelThread;
     if (conversation !== undefined) {
       const assistant = assistantMessageSchema.parse({
         type: 'assistant',
@@ -704,9 +695,6 @@ export class Runner implements AsyncDisposable {
         visibility: 'user',
       });
       conversation = appendConversationItems(conversation, assistant);
-      if (modelThread !== undefined) {
-        modelThread = appendConversationItems(modelThread, assistant);
-      }
     }
     const completed = runStateSchema.parse({
       ...state,
@@ -716,7 +704,6 @@ export class Runner implements AsyncDisposable {
       artifactStates: result.artifactStates,
       output: result.output,
       ...(conversation === undefined ? {} : { conversation }),
-      ...(modelThread === undefined ? {} : { modelThread }),
       pendingReview: undefined,
       revision: state.revision + 1,
       updatedAt: nowTimestamp(),
@@ -766,7 +753,6 @@ export class Runner implements AsyncDisposable {
       ...state,
       status: result.status === 'completed' ? 'completed' : 'awaiting-review',
       conversation: result.conversation,
-      modelThread: result.modelThread,
       contextUsage: options.contextUsage ?? [...state.contextUsage, ...result.contextUsage],
       validations: options.validations ?? state.validations,
       ...(result.status === 'completed'
@@ -791,7 +777,7 @@ export class Runner implements AsyncDisposable {
     let contextUsage = [...state.contextUsage, ...result.contextUsage];
 
     while (result.status === 'completed' && plan.validation.enabled) {
-      const executionContext = toolExecutionContext(result.modelThread);
+      const executionContext = toolExecutionContext(result.conversation);
       if (executionContext.length === 0) break;
       const attempt = validations.length;
       await context.events.emit({ type: 'validation-started', attempt });
@@ -831,8 +817,7 @@ export class Runner implements AsyncDisposable {
           prompt: formatValidationFeedback(validation),
           promptKind: 'internal-continuation',
           promptScope: 'validator',
-          conversation: removeRunAssistant(result.conversation, state.runId),
-          modelThread: result.modelThread,
+          conversation: internalizeRunAssistant(result.conversation, state.runId),
         },
         context,
       );
@@ -1058,8 +1043,8 @@ function lastUserRequest(conversation: ConversationState): string {
   return message.content;
 }
 
-function toolExecutionContext(modelThread: ConversationState): string {
-  return modelThread.items
+function toolExecutionContext(conversation: ConversationState): string {
+  return conversation.items
     .flatMap((item) => {
       if (item.type !== 'tool-result') return [];
       const value = item.value === undefined ? '' : `\nValue: ${JSON.stringify(item.value)}`;
@@ -1082,7 +1067,7 @@ function requireValidationProfile(validation: ValidationPolicy): AgentProfile {
   return validation.profile;
 }
 
-function removeRunAssistant(conversation: ConversationState, runId: RunId): ConversationState {
+function internalizeRunAssistant(conversation: ConversationState, runId: RunId): ConversationState {
   const index = conversation.items.findLastIndex(
     (item) => item.type === 'assistant' && item.runId === runId && item.visibility === 'user',
   );
@@ -1090,7 +1075,9 @@ function removeRunAssistant(conversation: ConversationState, runId: RunId): Conv
   return conversationStateSchema.parse({
     ...conversation,
     revision: conversation.revision + 1,
-    items: conversation.items.filter((_, itemIndex) => itemIndex !== index),
+    items: conversation.items.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, visibility: 'internal' as const } : item,
+    ),
   });
 }
 

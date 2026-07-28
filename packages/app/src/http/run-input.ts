@@ -4,32 +4,43 @@ import { z } from 'zod';
 
 import { base64StringSchema, decodeBase64 } from './base64.js';
 
-export const staticRunInputSchema = z
+const uploadSchema = z
   .object({
-    graphInput: z.record(z.string(), jsonValueSchema).default({}),
-    artifactUploads: z
-      .record(
-        z.string().min(1),
-        z.array(
-          z
-            .object({
-              filename: z.string().min(1),
-              contentBase64: base64StringSchema,
-            })
-            .strict(),
-        ),
-      )
-      .optional(),
+    filename: z.string().min(1),
+    contentBase64: base64StringSchema,
   })
   .strict();
 
-export const runInputSchema = z.union([
-  z.object({ prompt: z.string().min(1) }).strict(),
-  staticRunInputSchema,
-]);
+export const agentRunInputSchema = z
+  .object({
+    prompt: z.string().min(1),
+    uploads: z.array(uploadSchema).max(32).optional(),
+  })
+  .strict();
+
+export const staticRunInputSchema = z
+  .object({
+    graphInput: z.record(z.string(), jsonValueSchema).default({}),
+    artifactUploads: z.record(z.string().min(1), z.array(uploadSchema)).optional(),
+  })
+  .strict();
+
+export const runInputSchema = z.union([agentRunInputSchema, staticRunInputSchema]);
 
 export function decodeRunInput(input: z.output<typeof runInputSchema>): RunInput {
-  if ('prompt' in input) return input;
+  if ('prompt' in input) {
+    return {
+      prompt: input.prompt,
+      ...(input.uploads === undefined
+        ? {}
+        : {
+            uploads: input.uploads.map((upload) => ({
+              filename: upload.filename,
+              content: decodeBase64(upload.contentBase64),
+            })),
+          }),
+    };
+  }
   return {
     graphInput: input.graphInput,
     ...(input.artifactUploads === undefined

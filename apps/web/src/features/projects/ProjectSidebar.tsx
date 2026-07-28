@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, FolderKanban, MessageSquare, Plus } from 'lucide-react';
+import { Archive, ChevronRight, FolderKanban, MessageSquare, Plus } from 'lucide-react';
 import { useState } from 'react';
 
 import { api } from '../../api/client.js';
@@ -83,20 +83,30 @@ export function ProjectSidebar() {
             </button>
             {project.id === projectId ? (
               <div className="conversation-list">
-                {conversations.data?.map((conversation) => (
-                  <button
-                    key={conversation.id}
-                    className={`conversation-row ${
-                      conversation.id === conversationId ? 'selected' : ''
-                    }`}
-                    onClick={() => {
-                      selectConversation(conversation.id);
-                    }}
-                  >
-                    <MessageSquare size={14} />
-                    <span>{conversation.title}</span>
-                  </button>
-                ))}
+                {conversations.data?.map((conversation) => {
+                  const legacy = conversation.schemaVersion === 'legacy';
+                  return (
+                    <button
+                      key={conversation.id}
+                      className={`conversation-row ${
+                        conversation.id === conversationId ? 'selected' : ''
+                      } ${legacy ? 'legacy' : ''}`}
+                      disabled={legacy}
+                      title={
+                        legacy
+                          ? '这是 0.8.0 之前的会话；保留用于识别，但不会按 V3 状态加载。'
+                          : conversation.title
+                      }
+                      onClick={() => {
+                        selectConversation(conversation.id);
+                      }}
+                    >
+                      {legacy ? <Archive size={14} /> : <MessageSquare size={14} />}
+                      <span>{conversation.title}</span>
+                      {legacy ? <small>旧版</small> : null}
+                    </button>
+                  );
+                })}
                 <button
                   className="new-conversation"
                   onClick={() => {

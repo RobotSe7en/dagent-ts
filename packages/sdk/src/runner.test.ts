@@ -50,7 +50,7 @@ describe('Runner tool agent', () => {
       'tool-result',
       'assistant',
     ]);
-    expect(outcome.state.modelThread).toEqual(outcome.state.conversation);
+    expect(outcome.state).not.toHaveProperty('modelThread');
     expect(provider.requests).toHaveLength(2);
     await runner.close();
   });
@@ -268,7 +268,7 @@ describe('Runner tool agent', () => {
     expect(outcome.status).toBe('completed');
     expect(provider.requests).toHaveLength(2);
     expect(outcome.checkpoint.usage.modelCalls).toBe(2);
-    expect(JSON.stringify(outcome.state.modelThread)).not.toContain('not valid JSON');
+    expect(JSON.stringify(outcome.state.conversation)).not.toContain('not valid JSON');
     expect(provider.requests[1]?.messages.at(-1)?.content).toContain('Repair it');
     await runner.close();
   });

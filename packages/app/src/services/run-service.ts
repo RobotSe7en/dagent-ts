@@ -9,7 +9,7 @@ import type {
 import { DagentError, type Runner } from 'dagent-ai';
 import { reviewDecisionSchema, runIdSchema, runTargetSchema } from 'dagent-ai/contracts';
 
-import { type AppRepository } from '../database/repositories.js';
+import { requireConversationState, type AppRepository } from '../database/repositories.js';
 
 export type RunEventListener = (event: RunEvent) => void;
 
@@ -36,9 +36,12 @@ export class RunService {
     if (input.conversationId !== undefined) {
       await this.#claimConversation(input.conversationId);
     }
-    let runInput: RunInput;
+    let prepared: {
+      readonly input: RunInput;
+      readonly conversationRevision?: number;
+    };
     try {
-      runInput = await this.#withConversation(input.conversationId, input.runInput);
+      prepared = await this.#withConversation(input.conversationId, input.runInput);
     } catch (error) {
       this.#releaseConversation(input.conversationId);
       throw error;
@@ -52,7 +55,7 @@ export class RunService {
     this.#track(
       this.#consumeNewRun(
         target,
-        runInput,
+        prepared.input,
         {
           ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
           ...(input.savedDagId === undefined ? {} : { savedDagId: input.savedDagId }),
@@ -62,6 +65,7 @@ export class RunService {
         },
         resolveStarted,
         rejectStarted,
+        prepared.conversationRevision,
       ),
     );
     return started;
@@ -71,9 +75,12 @@ export class RunService {
     if (this.#closed) throw new Error('Run service is closed.');
     const runId = runIdSchema.parse(runIdValue);
     const decision = reviewDecisionSchema.parse(decisionValue);
-    const run = await this.repository.getRun(runId);
+    const run = await this.repository.claimRunReview(runId, decision);
     if (run?.checkpoint === undefined) {
-      throw new Error(`Run '${runId}' has no resumable checkpoint.`);
+      throw new DagentError(
+        'STALE_REVIEW',
+        `Run '${runId}' does not have a matching unclaimed review checkpoint.`,
+      );
     }
     if (run.conversationId !== undefined) this.#busyConversations.add(run.conversationId);
     this.#track(
@@ -91,6 +98,7 @@ export class RunService {
     if (run.checkpoint === undefined) return;
     const priorEvents = await this.repository.eventsAfter(runId, 0);
     let nextSequence = priorEvents.at(-1)?.sequence ?? 0;
+    let conversationRevision = run.checkpoint.state.conversation?.revision;
     let retainConversationClaim = false;
     try {
       for await (const rawEvent of this.runner.resumeStream(run.checkpoint, decision)) {
@@ -98,13 +106,21 @@ export class RunService {
         await this.repository.appendEvent(event);
         if (event.type === 'checkpoint') {
           retainConversationClaim = event.checkpoint.state.status === 'awaiting-review';
-          await this.repository.updateRun(runId, event.checkpoint.state.status, event.checkpoint);
-          if (run.conversationId !== undefined) {
-            await this.repository.updateConversationFromCheckpoint(
-              run.conversationId,
-              event.checkpoint,
-            );
+          const persisted = await this.repository.persistRunCheckpoint(
+            runId,
+            event.checkpoint.state.status,
+            event.checkpoint,
+            run.conversationId === undefined || conversationRevision === undefined
+              ? undefined
+              : {
+                  id: run.conversationId,
+                  expectedRevision: conversationRevision,
+                },
+          );
+          if (!persisted) {
+            throw conversationChanged(run.conversationId);
           }
+          conversationRevision = event.checkpoint.state.conversation?.revision;
         }
         this.#publish(event);
       }
@@ -150,6 +166,7 @@ export class RunService {
     },
     resolveStarted: (runId: RunId) => void,
     rejectStarted: (error: unknown) => void,
+    conversationRevision?: number,
   ): Promise<void> {
     let runId: RunId | undefined;
     let checkpoint: RunCheckpoint | undefined;
@@ -170,13 +187,21 @@ export class RunService {
         await this.repository.appendEvent(event);
         if (event.type === 'checkpoint') {
           checkpoint = event.checkpoint;
-          await this.repository.updateRun(runId, event.checkpoint.state.status, event.checkpoint);
-          if (associations.conversationId !== undefined) {
-            await this.repository.updateConversationFromCheckpoint(
-              associations.conversationId,
-              event.checkpoint,
-            );
+          const persisted = await this.repository.persistRunCheckpoint(
+            runId,
+            event.checkpoint.state.status,
+            event.checkpoint,
+            associations.conversationId === undefined || conversationRevision === undefined
+              ? undefined
+              : {
+                  id: associations.conversationId,
+                  expectedRevision: conversationRevision,
+                },
+          );
+          if (!persisted) {
+            throw conversationChanged(associations.conversationId);
           }
+          conversationRevision = event.checkpoint.state.conversation?.revision;
         }
         this.#publish(event);
       }
@@ -192,15 +217,24 @@ export class RunService {
     }
   }
 
-  async #withConversation(conversationId: string | undefined, input: RunInput): Promise<RunInput> {
-    if (conversationId === undefined || !('prompt' in input)) return input;
+  async #withConversation(
+    conversationId: string | undefined,
+    input: RunInput,
+  ): Promise<{
+    readonly input: RunInput;
+    readonly conversationRevision?: number;
+  }> {
+    if (conversationId === undefined || !('prompt' in input)) return { input };
     const stored = await this.repository.getConversation(conversationId);
     if (stored === undefined) {
       throw new Error(`Conversation '${conversationId}' was not found.`);
     }
     return {
-      ...input,
-      conversation: stored.conversation,
+      input: {
+        ...input,
+        conversation: requireConversationState(stored),
+      },
+      conversationRevision: stored.revision,
     };
   }
 
@@ -217,7 +251,7 @@ export class RunService {
       const persistedRuns = await this.repository.listRuns({ conversationId });
       if (
         persistedRuns.some(({ status }) =>
-          ['pending', 'planning', 'running', 'awaiting-review'].includes(status),
+          ['pending', 'planning', 'running', 'resuming', 'awaiting-review'].includes(status),
         )
       ) {
         throw conversationBusy(conversationId);
@@ -252,8 +286,29 @@ function conversationBusy(conversationId: string): DagentError {
   );
 }
 
+function conversationChanged(conversationId: string | undefined): DagentError {
+  return new DagentError(
+    'CONCURRENCY_CONFLICT',
+    conversationId === undefined
+      ? 'The run checkpoint was concurrently changed.'
+      : `Conversation '${conversationId}' changed while its run was active.`,
+  );
+}
+
 function persistedRunInput(input: RunInput): unknown {
-  if ('prompt' in input) return { prompt: input.prompt };
+  if ('prompt' in input) {
+    return {
+      prompt: input.prompt,
+      ...(input.uploads === undefined
+        ? {}
+        : {
+            uploads: input.uploads.map(({ filename, content }) => ({
+              filename,
+              byteLength: content.byteLength,
+            })),
+          }),
+    };
+  }
   return {
     ...(input.graphInput === undefined ? {} : { graphInput: input.graphInput }),
     ...(input.artifactUploads === undefined

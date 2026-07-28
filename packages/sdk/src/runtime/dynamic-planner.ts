@@ -30,7 +30,6 @@ import type { RuntimeExecutionContext } from './types.js';
 export type DynamicPlanInput = {
   readonly prompt: string;
   readonly conversation?: ConversationState;
-  readonly modelThread?: ConversationState;
   readonly previousGraph?: DAGSpec;
   readonly failure?: string;
   readonly completedNodeIds?: readonly string[];
@@ -40,7 +39,6 @@ export type DynamicPlanInput = {
 export type DynamicPlanResult = {
   readonly proposal: PlanProposal;
   readonly conversation: ConversationState;
-  readonly modelThread: ConversationState;
   readonly contextUsage: readonly ContextUsage[];
 };
 
@@ -59,18 +57,10 @@ export class DynamicPlanner {
       content: input.prompt,
       attachments: input.attachments ?? [],
     });
-    const conversation =
+    let thread =
       input.previousGraph === undefined
         ? appendConversationItems(baseConversation, user)
         : baseConversation;
-    let thread = conversationStateSchema.parse(
-      input.modelThread ?? {
-        schemaVersion: 3,
-        id: conversation.id,
-        revision: conversation.revision,
-        items: conversation.items,
-      },
-    );
     if (input.previousGraph === undefined && !thread.items.some((item) => item.id === user.id)) {
       thread = appendConversationItems(thread, {
         ...user,
@@ -198,7 +188,6 @@ export class DynamicPlanner {
     return {
       proposal,
       conversation: thread,
-      modelThread: thread,
       contextUsage: usages,
     };
   }

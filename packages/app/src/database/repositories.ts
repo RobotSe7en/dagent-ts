@@ -1,10 +1,5 @@
-import type { ContextUsage, ConversationState, RunCheckpoint, RunEvent, RunId } from 'dagent-ai';
-import {
-  conversationStateSchema,
-  contextUsageSchema,
-  runCheckpointSchema,
-  runEventSchema,
-} from 'dagent-ai/contracts';
+import type { ConversationState, ReviewDecision, RunCheckpoint, RunEvent, RunId } from 'dagent-ai';
+import { conversationStateSchema, runCheckpointSchema, runEventSchema } from 'dagent-ai/contracts';
 import { z } from 'zod';
 
 import type { AppDatabase } from './database.js';
@@ -28,13 +23,31 @@ export type Conversation = {
   readonly projectId: string;
   readonly title: string;
   readonly kind: ConversationKind;
-  readonly conversation: ConversationState;
-  readonly modelThread?: ConversationState;
-  readonly contextUsage: readonly ContextUsage[];
+  readonly schemaVersion: 3 | 'legacy';
+  readonly conversation?: ConversationState;
   readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
+
+export class LegacyConversationError extends Error {
+  public readonly code = 'LEGACY_CONVERSATION';
+  public readonly statusCode = 409;
+
+  public constructor(conversationId: string) {
+    super(
+      `Conversation '${conversationId}' predates the V3 conversation contract and is read-only.`,
+    );
+    this.name = 'LegacyConversationError';
+  }
+}
+
+export function requireConversationState(conversation: Conversation): ConversationState {
+  if (conversation.schemaVersion !== 3 || conversation.conversation === undefined) {
+    throw new LegacyConversationError(conversation.id);
+  }
+  return conversation.conversation;
+}
 
 export type StoredRun = {
   readonly id: RunId;
@@ -157,16 +170,15 @@ export class AppRepository {
     readonly kind?: ConversationKind;
   }): Promise<Conversation> {
     const timestamp = new Date().toISOString();
-    const conversation = conversationStateSchema.parse({ schemaVersion: 3 });
+    const id = `conversation_${crypto.randomUUID()}`;
+    const conversation = conversationStateSchema.parse({ schemaVersion: 3, id });
     const row: ConversationTable = {
-      id: `conversation_${crypto.randomUUID()}`,
+      id,
       project_id: input.projectId,
       title: input.title,
       kind: input.kind ?? 'chat',
-      schema_version: 1,
+      schema_version: 3,
       conversation_json: JSON.stringify(conversation),
-      model_thread_json: null,
-      context_usage_json: '[]',
       revision: 0,
       created_at: timestamp,
       updated_at: timestamp,
@@ -207,28 +219,6 @@ export class AppRepository {
     return Number(result.numUpdatedRows) === 0 ? undefined : this.getConversation(id);
   }
 
-  public async updateConversationFromCheckpoint(
-    id: string,
-    checkpoint: RunCheckpoint,
-  ): Promise<void> {
-    if (checkpoint.state.conversation === undefined) return;
-    await this.database
-      .updateTable('conversations')
-      .set({
-        schema_version: checkpoint.state.conversation.schemaVersion,
-        conversation_json: JSON.stringify(checkpoint.state.conversation),
-        model_thread_json:
-          checkpoint.state.modelThread === undefined
-            ? null
-            : JSON.stringify(checkpoint.state.modelThread),
-        context_usage_json: JSON.stringify(checkpoint.state.contextUsage),
-        revision: checkpoint.state.conversation.revision,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', id)
-      .execute();
-  }
-
   public async insertRun(input: {
     readonly id: RunId;
     readonly conversationId?: string;
@@ -263,6 +253,108 @@ export class AppRepository {
       })
       .where('id', '=', id)
       .execute();
+  }
+
+  public async persistRunCheckpoint(
+    id: RunId,
+    status: string,
+    checkpoint: RunCheckpoint,
+    conversation?: {
+      readonly id: string;
+      readonly expectedRevision: number;
+    },
+  ): Promise<boolean> {
+    const state = checkpoint.state.conversation;
+    if (conversation !== undefined && state === undefined) {
+      throw new Error(
+        `Checkpoint for hosted run '${id}' does not contain its canonical conversation state.`,
+      );
+    }
+    if (conversation !== undefined && state?.id !== conversation.id) {
+      throw new Error(
+        `Checkpoint conversation identity '${state?.id}' does not match host conversation '${conversation.id}'.`,
+      );
+    }
+    return this.database.transaction().execute(async (transaction) => {
+      if (conversation !== undefined && state !== undefined) {
+        const updated = await transaction
+          .updateTable('conversations')
+          .set({
+            schema_version: state.schemaVersion,
+            conversation_json: JSON.stringify(state),
+            revision: state.revision,
+            updated_at: new Date().toISOString(),
+          })
+          .where('id', '=', conversation.id)
+          .where('schema_version', '=', 3)
+          .where('revision', '=', conversation.expectedRevision)
+          .executeTakeFirst();
+        if (Number(updated.numUpdatedRows) !== 1) return false;
+      }
+      const updated = await transaction
+        .updateTable('runs')
+        .set({
+          status,
+          checkpoint_json: JSON.stringify(checkpoint),
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (Number(updated.numUpdatedRows) !== 1) {
+        throw new Error(`Cannot persist checkpoint for missing run '${id}'.`);
+      }
+      return true;
+    });
+  }
+
+  public async claimRunReview(
+    id: RunId,
+    decision: Pick<ReviewDecision, 'reviewId' | 'revision'>,
+  ): Promise<StoredRun | undefined> {
+    return this.database.transaction().execute(async (transaction) => {
+      const row = await transaction
+        .selectFrom('runs')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (row === undefined || row.status !== 'awaiting-review' || row.checkpoint_json === null) {
+        return undefined;
+      }
+      const run = readRun(row);
+      const review = run.checkpoint?.state.pendingReview;
+      if (
+        review === undefined ||
+        review.id !== decision.reviewId ||
+        review.revision !== decision.revision
+      ) {
+        return undefined;
+      }
+      const checkpointConversation = run.checkpoint?.state.conversation;
+      if (row.conversation_id !== null && checkpointConversation !== undefined) {
+        const conversation = await transaction
+          .selectFrom('conversations')
+          .select(['schema_version', 'revision'])
+          .where('id', '=', row.conversation_id)
+          .executeTakeFirst();
+        if (
+          conversation?.schema_version !== 3 ||
+          conversation.revision !== checkpointConversation.revision
+        ) {
+          return undefined;
+        }
+      }
+      const result = await transaction
+        .updateTable('runs')
+        .set({
+          status: 'resuming',
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', id)
+        .where('status', '=', 'awaiting-review')
+        .where('checkpoint_json', '=', row.checkpoint_json)
+        .executeTakeFirst();
+      return Number(result.numUpdatedRows) === 1 ? run : undefined;
+    });
   }
 
   public async getRun(id: RunId): Promise<StoredRun | undefined> {
@@ -371,22 +463,31 @@ export class AppRepository {
 }
 
 function readConversation(row: ConversationTable): Conversation {
-  const modelThread =
-    row.model_thread_json === null
-      ? undefined
-      : conversationStateSchema.parse(JSON.parse(row.model_thread_json));
+  const parsed =
+    row.schema_version === 3
+      ? conversationStateSchema.safeParse(safeJsonParse(row.conversation_json))
+      : undefined;
+  const conversation =
+    parsed?.success === true && parsed.data.id === row.id ? parsed.data : undefined;
   return {
     id: row.id,
     projectId: row.project_id,
     title: row.title,
     kind: conversationKindSchema.parse(row.kind),
-    conversation: conversationStateSchema.parse(JSON.parse(row.conversation_json)),
-    ...(modelThread === undefined ? {} : { modelThread }),
-    contextUsage: z.array(contextUsageSchema).parse(JSON.parse(row.context_usage_json)),
+    schemaVersion: conversation === undefined ? 'legacy' : 3,
+    ...(conversation === undefined ? {} : { conversation }),
     revision: row.revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 const conversationKindSchema = z.enum(['chat', 'dynamic-dag', 'static-dag']);

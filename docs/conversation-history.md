@@ -1,29 +1,30 @@
 # 会话历史与上下文
 
-这部分采用多轮历史改造方案，不把“聊天记录”简化为 provider 消息数组。
+这部分采用 0.8.0 V3 会话方案，不把“聊天记录”简化为 provider 消息数组，也不维护两份
+会话状态。
 
-## 三个独立视图
+## 一个权威文档、两个投影视图
 
-1. `conversation`：用户可见的稳定历史，只包含用户消息和最终助手消息。
-2. `modelThread`：一次 Agent 连续推理所需的内部线程，包含工具调用结果、规划消息和
-   内部助手消息。
-3. `contextUsage`：每次模型调用前的预算、截断和压缩审计记录。
+V3 只持久化一个完整、有界的 `ConversationState`。它同时包含用户消息、助手回答、
+工具调用结果，以及 planner、validator 等内部审计项。`scope` 和 `visibility` 决定用途：
 
-每条记录都是判别联合：
+- ContextAssembler 从该文档生成 provider 输入，但永不回放 reasoning；
+- HTTP 层只返回 `visibility=user` 的项，并移除助手 reasoning 与 tool calls；
+- `ContextUsage` 作为 run checkpoint/事件审计保存，不再拆成第二份会话历史。
+
+会话项是判别联合：
 
 - `UserMessage`
 - `AssistantMessage`
 - `ToolResultMessage`
 
-消息还带 `scope`（conversation、router、planner、validator、subagent、compactor）
-和 `visibility`（user、internal）。provider 适配发生在最后一步，因此 OpenAI 兼容
-字段不会污染持久化模型。
+provider 适配发生在最后一步，因此 OpenAI 兼容字段不会污染持久化模型。
 
 ## 推理记录
 
 `AssistantMessage.reasoning` 可存储 provider 返回的 reasoning 字段或 think 标签内容。
-它可在 Run Inspector 中审计，但 ContextAssembler 从不把它投影回模型请求，避免隐藏
-推理被递归放大或意外暴露。
+它属于内部审计数据。ContextAssembler 不会把它投影回模型请求，公共 HTTP 投影也不会
+返回它，避免隐藏推理被递归放大或意外暴露。
 
 ## 上下文压缩
 
@@ -37,11 +38,18 @@
 - 预留 15% 安全余量。
 
 优先用模型生成保留需求、约束、事实、失败和未完成事项的摘要。如果压缩模型失败，
-使用确定性 fallback，并在 `ContextUsage.compactionMethod` 中记录。大型工具结果原子
-写入运行目录，只在历史中保留相对路径、字节数、SHA-256 和 preview。
+使用确定性 fallback，并在 `ContextUsage.compactionMethod` 中记录。压缩输入和输出都
+严格受 token budget 限制。
 
-## 检查点
+大型工具结果原子写入运行目录，只在历史中保留有类型的相对路径、字节数、SHA-256 和
+preview。只有带 `valueReference` provenance 的值才会被恢复，普通用户 JSON 不会被
+误识别为引用。附件和会话引用会进入 content-addressed store，并在下一轮工作区重建。
 
-审核检查点同时保存 `conversation`、`modelThread` 和 `contextUsage`。恢复时继续原模型
-线程，但下一条最终回答只追加到公开 conversation。这样既保持多轮连贯性，也不会把
-工具噪声直接展示给用户。
+## 检查点与 Host 持久化
+
+审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹、执行限制和
+`contextUsage`。Host 对 checkpoint 使用一次性原子 claim，并在整体替换会话时使用
+revision compare-and-swap。重复审核、定义变化或过期会话 revision 都会在执行前被拒绝。
+
+数据库迁移不会在运行时猜测 V1/V2 结构：没有合法且 identity 匹配的 V3 文档会被标记为
+`legacy`，详情与继续运行接口返回 HTTP 409。

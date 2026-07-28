@@ -44,11 +44,23 @@
     "name": "Assistant",
     "scope": { "capabilities": ["tool.read_file"] }
   },
-  "input": { "prompt": "Read README.md" }
+  "input": {
+    "prompt": "Read the attached specification",
+    "uploads": [
+      {
+        "filename": "spec.md",
+        "contentBase64": "IyBTcGVjaWZpY2F0aW9u"
+      }
+    ]
+  }
 }
 ```
 
 服务返回 `202` 和 `runId`。客户端随后连接事件流。
+
+Host 只接受 V3 conversation id；旧 conversation 会明确返回
+`409 LEGACY_CONVERSATION`。会话更新采用 revision CAS，同一 review checkpoint 也只能
+原子消费一次。
 
 ## SSE 恢复
 

@@ -75,7 +75,6 @@ function publicCheckpoint(checkpoint: NonNullable<StoredRun['checkpoint']>) {
 function publicState(state: NonNullable<StoredRun['checkpoint']>['state']) {
   const { conversation } = state;
   const visible = { ...state };
-  delete visible.modelThread;
   delete visible.conversation;
   return {
     ...visible,

@@ -12,7 +12,7 @@ const baseRequest: ChatRequest = {
 };
 
 describe('OpenAICompatibleProvider', () => {
-  it('forwards strict JSON Schema, tools, reasoning options, and token usage', async () => {
+  it('requests compatible structured output, tools, reasoning options, and token usage', async () => {
     const create = vi.fn().mockResolvedValue({
       choices: [
         {
@@ -74,17 +74,13 @@ describe('OpenAICompatibleProvider', () => {
       expect.objectContaining({
         stream: false,
         reasoning_effort: 'medium',
+        thinking_token_budget: 512,
         extra_body: {
           temperature: 0,
           thinking: { type: 'enabled' },
-          thinking_token_budget: 512,
         },
         response_format: {
-          type: 'json_schema',
-          json_schema: expect.objectContaining({
-            name: 'answer',
-            strict: true,
-          }),
+          type: 'json_object',
         },
         tools: [
           expect.objectContaining({
@@ -173,6 +169,161 @@ describe('OpenAICompatibleProvider', () => {
             arguments: { text: 'hi' },
           },
         ],
+      },
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.not.objectContaining({ stream_options: expect.anything() }),
+      undefined,
+    );
+  });
+
+  it('opts into streamed usage metadata only when the endpoint supports it', async () => {
+    const create = vi.fn().mockResolvedValue(stream([]));
+    const provider = providerWith(create, { streamIncludeUsage: true });
+
+    const events: ChatStreamEvent[] = [];
+    for await (const event of provider.streamChat(baseRequest)) events.push(event);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+      undefined,
+    );
+    expect(events.at(-1)?.type).toBe('done');
+  });
+
+  it('merges explicit provider options over generated reasoning defaults', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { content: 'done', refusal: null, tool_calls: [] } }],
+    });
+    const provider = providerWith(create, {
+      reasoning: { enabled: true, effort: 'high' },
+      extraRequestArgs: { reasoning_effort: 'low', temperature: 0 },
+      extraBody: {
+        thinking: { type: 'disabled', budget: 512 },
+        chat_template_kwargs: { enable_thinking: false },
+      },
+    });
+
+    await provider.chat(baseRequest);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoning_effort: 'low',
+        temperature: 0,
+        extra_body: {
+          thinking: { type: 'disabled', budget: 512 },
+          chat_template_kwargs: { enable_thinking: false },
+        },
+      }),
+      undefined,
+    );
+  });
+
+  it('rejects invalid or non-object model tool-call arguments', async () => {
+    const invalidJson = providerWith(
+      vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: '',
+              refusal: null,
+              tool_calls: [
+                {
+                  id: 'call-1',
+                  type: 'function',
+                  function: { name: 'tool.echo', arguments: '{invalid' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const nonObject = providerWith(
+      vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: '',
+              refusal: null,
+              tool_calls: [
+                {
+                  id: 'call-2',
+                  type: 'function',
+                  function: { name: 'tool.echo', arguments: '[]' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    await expect(invalidJson.chat(baseRequest)).rejects.toThrow(/not valid JSON/u);
+    await expect(nonObject.chat(baseRequest)).rejects.toThrow(/JSON object/u);
+  });
+
+  it('strips think tags without retaining them when capture is field-only', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '<think>discarded</think>visible',
+              reasoning_content: 'field',
+              refusal: null,
+              tool_calls: [],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(
+        stream([
+          {
+            choices: [
+              {
+                delta: {
+                  reasoning_content: 'field-stream',
+                  content: '<think>discarded-stream</think>visible-stream',
+                },
+              },
+            ],
+          },
+        ]),
+      );
+    const provider = providerWith(create, { reasoning: { capture: 'field' } });
+
+    await expect(provider.chat(baseRequest)).resolves.toMatchObject({
+      content: 'visible',
+      reasoningContent: 'field',
+    });
+    const events: ChatStreamEvent[] = [];
+    for await (const event of provider.streamChat(baseRequest)) events.push(event);
+
+    const tokens = events.filter(
+      (event): event is Extract<ChatStreamEvent, { type: 'token' }> => event.type === 'token',
+    );
+    expect(
+      tokens
+        .filter((event) => event.channel === 'reasoning')
+        .map((event) => event.content)
+        .join(''),
+    ).toBe('field-stream');
+    expect(
+      tokens
+        .filter((event) => event.channel === 'content')
+        .map((event) => event.content)
+        .join(''),
+    ).toBe('visible-stream');
+    expect(events.at(-1)).toMatchObject({
+      type: 'done',
+      response: {
+        content: 'visible-stream',
+        reasoningContent: 'field-stream',
       },
     });
   });

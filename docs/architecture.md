@@ -58,4 +58,6 @@ HTTP 生命周期和静态 UI。Web 端只消费版本化 API，不接触运行�
 
 SQLite 使用 WAL、外键和 busy timeout。服务启动时获取带心跳的单写者租约。
 `run_events` 对 `(run_id, sequence)` 建立唯一约束；SSE 先读取历史事件，再订阅实时
-事件。会话表分别保存公开 conversation、内部 model thread 和 context usage。
+事件。会话表只保存 identity 匹配的完整 V3 `ConversationState`；checkpoint 独立保存在
+run 表。会话整体替换使用 revision CAS，review 恢复先对 checkpoint 做原子 claim。
+公共消息、trace 和 context usage 都是权威文档或 run 事件的投影，不是第二份状态。

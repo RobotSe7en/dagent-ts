@@ -178,6 +178,8 @@ function ModelsSettings() {
             timeoutMs: 60_000,
             contextWindowTokens: 128_000,
             outputReserveTokens: 8192,
+            streamIncludeUsage: false,
+            extraRequestArgs: {},
             extraBody: {},
           }}
           submitLabel="保存模型"

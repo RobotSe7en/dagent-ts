@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import type { McpServerConfig } from 'dagent-ai';
 import { dockerSandboxConfigSchema, mcpServerConfigSchema } from 'dagent-ai';
+import { jsonObjectSchema } from 'dagent-ai/contracts';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -28,10 +29,27 @@ export const appConfigSchema = z
         model: z.string().min(1).default('gpt-5-mini'),
         apiKey: z.string().optional(),
         apiKeyEnv: z.string().default('OPENAI_API_KEY'),
+        timeoutMs: z.number().int().positive().default(60_000),
+        reasoning: z
+          .object({
+            enabled: z.boolean().optional(),
+            effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+            budgetTokens: z.number().int().positive().optional(),
+            capture: z.enum(['field', 'field-and-tags']).optional(),
+          })
+          .strict()
+          .optional(),
+        streamIncludeUsage: z.boolean().default(false),
         contextWindowTokens: z.number().int().min(1024).default(128_000),
         outputReserveTokens: z.number().int().nonnegative().default(8192),
+        extraRequestArgs: jsonObjectSchema.default({}),
+        extraBody: jsonObjectSchema.default({}),
       })
       .strict()
+      .refine((provider) => provider.outputReserveTokens < provider.contextWindowTokens, {
+        message: 'outputReserveTokens must be smaller than contextWindowTokens.',
+        path: ['outputReserveTokens'],
+      })
       .prefault({}),
     skillRoots: z.array(z.string()).default([]),
     profiles: z

@@ -101,9 +101,59 @@ describe('API client', () => {
     );
 
     await expect(api.validateDag({})).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
       message: 'The DAG is invalid.',
       status: 400,
     });
+  });
+
+  it('sends conversation uploads through the typed run contract', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse({ runId: 'run-upload' }));
+    vi.stubGlobal('fetch', fetch);
+    const target = {
+      kind: 'tool-agent' as const,
+      id: 'assistant',
+      name: 'Assistant',
+      description: '',
+      systemPrompt: 'Help.',
+      scope: { capabilities: [], skills: [], agents: [] },
+      reviewLevel: 'never' as const,
+      context: {
+        compactionTriggerRatio: 0.8,
+        keepRecentTurns: 4,
+        summaryMaxTokens: 1024,
+        maxToolResultTokens: 2048,
+        maxTotalToolResultTokens: 8192,
+        tokenSafetyMargin: 0.15,
+      },
+      maxSteps: 20,
+    };
+
+    await api.startRun({
+      conversationId: 'conversation-1',
+      target,
+      input: {
+        prompt: 'Read this.',
+        uploads: [{ filename: 'notes.txt', contentBase64: 'aGVsbG8=' }],
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/runs',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          conversationId: 'conversation-1',
+          target,
+          input: {
+            prompt: 'Read this.',
+            uploads: [{ filename: 'notes.txt', contentBase64: 'aGVsbG8=' }],
+          },
+        }),
+      }),
+    );
   });
 
   it('subscribes to named run events and closes the EventSource', () => {

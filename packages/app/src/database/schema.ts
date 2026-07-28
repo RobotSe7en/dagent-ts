@@ -16,8 +16,6 @@ export type ConversationTable = {
   kind: string;
   schema_version: number;
   conversation_json: string;
-  model_thread_json: string | null;
-  context_usage_json: string;
   revision: number;
   created_at: string;
   updated_at: string;
@@ -102,6 +100,8 @@ export type ModelProviderTable = {
   context_window_tokens: number;
   output_reserve_tokens: number;
   reasoning_json: string;
+  stream_include_usage: number;
+  extra_request_args_json: string;
   extra_body_json: string;
   active: number;
   created_at: string;

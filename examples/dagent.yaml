@@ -1,16 +1,23 @@
-workspace: .dagent-ts
-builtins:
-  - files
-  - shell
-  - memory
+host: 127.0.0.1
+port: 8000
+dataDirectory: ./.dagent-ts
+
+provider:
+  baseURL: https://api.openai.com/v1
+  model: gpt-5-mini
+  apiKeyEnv: OPENAI_API_KEY
+  timeoutMs: 60000
+  streamIncludeUsage: false
+  contextWindowTokens: 128000
+  outputReserveTokens: 8192
+  extraRequestArgs: {}
+  extraBody: {}
 
 sandbox:
   enabled: false
 
-skills:
-  roots:
-    - ./skills
-  managedRoot: ./.dagent-ts/skills
+skillRoots:
+  - ./skills
 
 profiles:
   directory: ./profiles
@@ -20,17 +27,5 @@ validation:
   maxRetries: 1
   profile: validator_agent
 
-limits:
-  maxModelCalls: 50
-  maxCapabilityCalls: 100
-  maxNodeExecutions: 200
-  maxConcurrency: 8
-
-context:
-  compactionTriggerRatio: 0.8
-  keepRecentTurns: 4
-  summaryMaxTokens: 1024
-
 mcpServers: []
-modules: []
-agents: []
+capabilityModules: []

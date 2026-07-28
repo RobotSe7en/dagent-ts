@@ -1,7 +1,6 @@
 import type {
   AutoAgent,
   ConversationState,
-  ContextUsage,
   DagAgent,
   DAGSpec,
   JsonObject,
@@ -27,6 +26,7 @@ export type ConversationSummary = {
   readonly projectId: string;
   readonly title: string;
   readonly kind: 'chat' | 'dynamic-dag' | 'static-dag';
+  readonly schemaVersion: 3 | 'legacy';
   readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -34,7 +34,6 @@ export type ConversationSummary = {
 
 export type Conversation = ConversationSummary & {
   readonly conversation: ConversationState;
-  readonly contextUsage: readonly ContextUsage[];
 };
 
 export type StoredRun = {
@@ -100,6 +99,8 @@ export type ModelProvider = {
   readonly timeoutMs: number;
   readonly contextWindowTokens: number;
   readonly outputReserveTokens: number;
+  readonly streamIncludeUsage: boolean;
+  readonly extraRequestArgs: Readonly<Record<string, unknown>>;
 };
 
 export type ProfileDescriptor = {
@@ -178,12 +179,14 @@ export type ProjectFile =
       readonly previewOmitted?: 'binary' | 'too-large';
     };
 
-class ApiError extends Error {
+export class ApiError extends Error {
   public constructor(
     message: string,
     public readonly status: number,
+    public readonly code: string,
   ) {
     super(message);
+    this.name = 'ApiError';
   }
 }
 
@@ -196,10 +199,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => undefined)) as
-      { error?: { message?: string } } | undefined;
+      { error?: { code?: string; message?: string } } | undefined;
     throw new ApiError(
       body?.error?.message ?? `Request failed (${response.status}).`,
       response.status,
+      body?.error?.code ?? 'HTTP_ERROR',
     );
   }
   if (response.status === 204) return undefined as T;
@@ -326,7 +330,15 @@ export const api = {
   startRun: (input: {
     readonly conversationId?: string;
     readonly target: RunTarget;
-    readonly input: { readonly prompt: string } | { readonly graphInput: JsonObject };
+    readonly input:
+      | {
+          readonly prompt: string;
+          readonly uploads?: readonly {
+            readonly filename: string;
+            readonly contentBase64: string;
+          }[];
+        }
+      | { readonly graphInput: JsonObject };
   }) =>
     request<{ readonly runId: RunId }>('/runs', {
       method: 'POST',

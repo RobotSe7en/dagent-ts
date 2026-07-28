@@ -4,9 +4,11 @@ import {
   Bot,
   CircleStop,
   CornerDownLeft,
+  Paperclip,
   LoaderCircle,
   MessageSquareText,
   UserRound,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -21,6 +23,7 @@ export function ChatWorkspace() {
   const { conversationId, activeRunId, beginRun, appendRunEvent, clearRun, runEvents } =
     useWorkspace();
   const [prompt, setPrompt] = useState('');
+  const [uploads, setUploads] = useState<readonly File[]>([]);
   const [streamedContent, setStreamedContent] = useState('');
   const [streamError, setStreamError] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -37,7 +40,7 @@ export function ChatWorkspace() {
     queryFn: api.capabilities,
   });
   const start = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async (input: { readonly text: string; readonly uploads: readonly File[] }) => {
       if (conversationId === undefined) throw new Error('Select a conversation.');
       const target = toolAgent(
         capabilities.data
@@ -47,11 +50,24 @@ export function ChatWorkspace() {
       return api.startRun({
         conversationId,
         target,
-        input: { prompt: text },
+        input: {
+          prompt: input.text,
+          ...(input.uploads.length === 0
+            ? {}
+            : {
+                uploads: await Promise.all(
+                  input.uploads.map(async (file) => ({
+                    filename: file.name,
+                    contentBase64: await fileBase64(file),
+                  })),
+                ),
+              }),
+        },
       });
     },
     onSuccess: ({ runId }) => {
       setPrompt('');
+      setUploads([]);
       setStreamedContent('');
       setStreamError('');
       beginRun(runId);
@@ -169,46 +185,79 @@ export function ChatWorkspace() {
         onSubmit={(event) => {
           event.preventDefault();
           if (prompt.trim() !== '' && activeRunId === undefined) {
-            start.mutate(prompt.trim());
+            start.mutate({ text: prompt.trim(), uploads });
           }
         }}
       >
-        <textarea
-          value={prompt}
-          onChange={(event) => {
-            setPrompt(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder="描述任务，Shift + Enter 换行"
-          rows={2}
-        />
-        {activeRunId === undefined ? (
-          <button
-            className="send-button"
-            disabled={start.isPending || prompt.trim() === ''}
-            title="发送"
-          >
-            {start.isPending ? (
-              <LoaderCircle className="spin" size={18} />
-            ) : (
-              <CornerDownLeft size={18} />
-            )}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="stop-button"
-            title="停止"
-            onClick={() => void api.cancelRun(activeRunId)}
-          >
-            <CircleStop size={18} />
-          </button>
-        )}
+        {uploads.length > 0 ? (
+          <div className="upload-list">
+            {uploads.map((file, index) => (
+              <span key={`${file.name}-${file.size}-${index}`}>
+                {file.name}
+                <button
+                  type="button"
+                  aria-label={`移除 ${file.name}`}
+                  onClick={() => {
+                    setUploads((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="composer-row">
+          <label className="attach-button" title="上传文件">
+            <Paperclip size={18} />
+            <input
+              type="file"
+              multiple
+              disabled={activeRunId !== undefined}
+              onChange={(event) => {
+                const selected = [...(event.currentTarget.files ?? [])];
+                setUploads((current) => [...current, ...selected].slice(0, 32));
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
+          <textarea
+            value={prompt}
+            onChange={(event) => {
+              setPrompt(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="描述任务，Shift + Enter 换行"
+            rows={2}
+          />
+          {activeRunId === undefined ? (
+            <button
+              className="send-button"
+              disabled={start.isPending || prompt.trim() === ''}
+              title="发送"
+            >
+              {start.isPending ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <CornerDownLeft size={18} />
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="stop-button"
+              title="停止"
+              onClick={() => void api.cancelRun(activeRunId)}
+            >
+              <CircleStop size={18} />
+            </button>
+          )}
+        </div>
       </form>
     </section>
   );
@@ -227,6 +276,16 @@ function Message(props: {
       <div className="message-body">
         <div className="message-role">{assistant ? 'Dagent' : 'You'}</div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{props.item.content}</ReactMarkdown>
+        {props.item.type === 'user' && props.item.attachments.length > 0 ? (
+          <div className="message-attachments">
+            {props.item.attachments.map((attachment) => (
+              <span key={attachment.id}>
+                <Paperclip size={12} />
+                {attachment.path.split('/').at(-1)}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {props.streaming ? <span className="typing-caret" /> : null}
       </div>
     </article>
@@ -237,40 +296,62 @@ function ReviewBanner(props: {
   readonly runId: Parameters<typeof api.review>[0];
   readonly event: Extract<RunEvent, { type: 'review-required' }>;
 }) {
-  const [resolved, setResolved] = useState(false);
-  if (resolved) return null;
-  const decide = (action: 'approve' | 'reject') => {
-    setResolved(true);
-    void api.review(props.runId, {
-      reviewId: props.event.review.id,
-      revision: props.event.review.revision,
-      action,
-      reason: '',
-    });
-  };
+  const review = useMutation({
+    mutationFn: (action: 'approve' | 'reject') =>
+      api.review(props.runId, {
+        reviewId: props.event.review.id,
+        revision: props.event.review.revision,
+        action,
+        reason: '',
+      }),
+  });
+  if (review.isSuccess) return null;
   return (
     <div className="review-banner">
       <div>
         <strong>需要确认</strong>
         <span>{props.event.review.summary}</span>
+        {review.error instanceof Error ? (
+          <span className="review-error">{review.error.message}</span>
+        ) : null}
       </div>
       <button
         onClick={() => {
-          decide('reject');
+          review.mutate('reject');
         }}
+        disabled={review.isPending}
       >
         拒绝
       </button>
       <button
         className="primary"
         onClick={() => {
-          decide('approve');
+          review.mutate('approve');
         }}
+        disabled={review.isPending}
       >
         批准
       </button>
     </div>
   );
+}
+
+async function fileBase64(file: File): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      reject(reader.error ?? new Error(`无法读取文件 ${file.name}`));
+    };
+    reader.onload = () => {
+      const value = reader.result;
+      if (typeof value !== 'string') {
+        reject(new Error(`无法编码文件 ${file.name}`));
+        return;
+      }
+      resolvePromise(value.slice(value.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function toolAgent(capabilityIds: readonly string[]): RunTarget {

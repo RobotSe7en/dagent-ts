@@ -16,6 +16,7 @@ import type { ChatProvider } from 'dagent-ai';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import packageMetadata from '../../package.json' with { type: 'json' };
 import type { AppConfig } from '../config.js';
 import { databasePath } from '../config.js';
 import { openDatabase, type AppDatabase } from '../database/database.js';
@@ -161,7 +162,7 @@ export async function createApplication(options: {
       error instanceof z.ZodError
         ? 400
         : error instanceof DagentError
-          ? error.code === 'CONCURRENCY_CONFLICT'
+          ? error.code === 'CONCURRENCY_CONFLICT' || error.code === 'STALE_REVIEW'
             ? 409
             : error.code === 'CAPABILITY_NOT_FOUND'
               ? 404
@@ -186,7 +187,10 @@ export async function createApplication(options: {
     });
   });
 
-  server.get('/api/v1/health', async () => ({ status: 'ok', version: '0.1.0' }));
+  server.get('/api/v1/health', async () => ({
+    status: 'ok',
+    version: packageMetadata.version,
+  }));
   registerAgentRoutes(server, agents);
   registerModelRoutes(server, models);
   registerMcpRoutes(server, mcpServers);

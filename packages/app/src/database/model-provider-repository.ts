@@ -26,6 +26,8 @@ export type ModelProviderConfig = {
   readonly contextWindowTokens: number;
   readonly outputReserveTokens: number;
   readonly reasoning?: z.infer<typeof reasoningConfigSchema>;
+  readonly streamIncludeUsage: boolean;
+  readonly extraRequestArgs: JsonObject;
   readonly extraBody: JsonObject;
   readonly active: boolean;
   readonly createdAt: string;
@@ -71,6 +73,8 @@ export class ModelProviderRepository {
             context_window_tokens: row.context_window_tokens,
             output_reserve_tokens: row.output_reserve_tokens,
             reasoning_json: row.reasoning_json,
+            stream_include_usage: row.stream_include_usage,
+            extra_request_args_json: row.extra_request_args_json,
             extra_body_json: row.extra_body_json,
             active: row.active,
             updated_at: row.updated_at,
@@ -145,6 +149,8 @@ export class ModelProviderRepository {
         context_window_tokens: row.context_window_tokens,
         output_reserve_tokens: row.output_reserve_tokens,
         reasoning_json: row.reasoning_json,
+        stream_include_usage: row.stream_include_usage,
+        extra_request_args_json: row.extra_request_args_json,
         extra_body_json: row.extra_body_json,
         updated_at: row.updated_at,
       })
@@ -208,6 +214,8 @@ function writeRow(
     context_window_tokens: input.contextWindowTokens,
     output_reserve_tokens: input.outputReserveTokens,
     reasoning_json: JSON.stringify(input.reasoning ?? null),
+    stream_include_usage: input.streamIncludeUsage ? 1 : 0,
+    extra_request_args_json: JSON.stringify(jsonObjectSchema.parse(input.extraRequestArgs)),
     extra_body_json: JSON.stringify(jsonObjectSchema.parse(input.extraBody)),
     active: metadata.active ? 1 : 0,
     created_at: metadata.createdAt,
@@ -231,6 +239,8 @@ function readModel(row: ModelProviderTable): ModelProviderConfig {
     contextWindowTokens: row.context_window_tokens,
     outputReserveTokens: row.output_reserve_tokens,
     ...(reasoning === undefined ? {} : { reasoning }),
+    streamIncludeUsage: row.stream_include_usage === 1,
+    extraRequestArgs: jsonObjectSchema.parse(JSON.parse(row.extra_request_args_json)),
     extraBody: jsonObjectSchema.parse(JSON.parse(row.extra_body_json)),
     active: row.active === 1,
     createdAt: row.created_at,

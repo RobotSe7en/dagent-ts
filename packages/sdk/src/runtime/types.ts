@@ -29,14 +29,12 @@ export type AgentLoopResult =
   | {
       readonly status: 'completed';
       readonly conversation: ConversationState;
-      readonly modelThread: ConversationState;
       readonly contextUsage: readonly ContextUsage[];
       readonly output: string;
     }
   | {
       readonly status: 'awaiting-review';
       readonly conversation: ConversationState;
-      readonly modelThread: ConversationState;
       readonly contextUsage: readonly ContextUsage[];
       readonly review: PendingReview;
     };

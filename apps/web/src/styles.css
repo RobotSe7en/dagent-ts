@@ -214,6 +214,25 @@ textarea:focus-visible {
   color: var(--blue);
 }
 
+.conversation-row.legacy {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.conversation-row.legacy:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.conversation-row small {
+  margin-left: auto;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
 .new-conversation {
   color: var(--text-secondary);
 }
@@ -550,19 +569,84 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
+.composer-row {
+  position: relative;
+}
+
 .composer textarea {
   display: block;
   width: 100%;
   min-height: 62px;
   max-height: 180px;
   resize: vertical;
-  padding: 14px 52px 12px 15px;
+  padding: 14px 52px 12px 48px;
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: var(--surface);
   color: var(--text);
   line-height: 1.5;
   box-shadow: 0 8px 26px rgb(31 40 62 / 8%);
+}
+
+.attach-button {
+  position: absolute;
+  z-index: 1;
+  bottom: 17px;
+  left: 15px;
+  display: grid;
+  color: var(--muted);
+  cursor: pointer;
+  place-items: center;
+}
+
+.attach-button:hover {
+  color: var(--blue);
+}
+
+.attach-button input {
+  display: none;
+}
+
+.upload-list,
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.upload-list {
+  margin-bottom: 7px;
+}
+
+.upload-list span,
+.message-attachments span {
+  display: inline-flex;
+  max-width: 230px;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-list button {
+  display: grid;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  place-items: center;
+}
+
+.message-attachments {
+  margin-top: 9px;
 }
 
 .send-button,
@@ -629,6 +713,10 @@ textarea:focus-visible {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.review-banner .review-error {
+  color: var(--red);
 }
 
 button.primary,

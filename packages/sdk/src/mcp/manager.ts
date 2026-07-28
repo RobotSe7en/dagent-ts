@@ -12,6 +12,7 @@ import { capability } from '../capabilities/index.js';
 import type { JsonValue } from '../contracts/index.js';
 import { capabilityIdSchema, jsonValueSchema } from '../contracts/index.js';
 import { DagentError, errorMessage } from '../errors.js';
+import packageMetadata from '../../package.json' with { type: 'json' };
 import type { McpServerConfig } from './config.js';
 import { mcpServerConfigSchema } from './config.js';
 
@@ -115,7 +116,7 @@ export class McpManager implements AsyncDisposable {
       throw new DagentError('INVALID_INPUT', `MCP server '${config.name}' is already connected.`);
     }
 
-    const client = new Client({ name: 'dagent-ai', version: '0.1.0' });
+    const client = new Client({ name: 'dagent-ai', version: packageMetadata.version });
     try {
       const transport =
         config.transport === 'stdio'

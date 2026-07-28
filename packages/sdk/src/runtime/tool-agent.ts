@@ -39,7 +39,6 @@ export type ToolAgentInput = {
   readonly promptKind?: 'user-turn' | 'internal-continuation';
   readonly promptScope?: ModelScope;
   readonly conversation?: ConversationState;
-  readonly modelThread?: ConversationState;
   readonly attachments?: readonly Attachment[];
 };
 
@@ -58,15 +57,7 @@ export class ToolAgentRuntime {
     const initialConversation = conversationStateSchema.parse(
       input.conversation ?? { schemaVersion: 3 },
     );
-    let conversation: ConversationState;
-    let thread = conversationStateSchema.parse(
-      input.modelThread ?? {
-        schemaVersion: 3,
-        id: initialConversation.id,
-        revision: initialConversation.revision,
-        items: initialConversation.items,
-      },
-    );
+    let thread = conversationStateSchema.parse(initialConversation);
     if (input.prompt !== undefined) {
       const userTurn = input.promptKind !== 'internal-continuation';
       const prompt = userMessageSchema.parse({
@@ -122,7 +113,6 @@ export class ToolAgentRuntime {
         },
       });
       thread = prepared.conversation;
-      conversation = prepared.conversation;
       contextUsages.push(prepared.usage);
       if (compactionStarted && prepared.usage.compactionMethod === 'deterministic-fallback') {
         await context.events.emit({
@@ -152,13 +142,11 @@ export class ToolAgentRuntime {
         visibility: response.toolCalls.length === 0 ? 'user' : 'internal',
       });
       thread = appendConversationItems(thread, assistant);
-      conversation = appendConversationItems(conversation, assistant);
 
       if (response.toolCalls.length === 0) {
         return {
           status: 'completed',
-          conversation,
-          modelThread: thread,
+          conversation: thread,
           contextUsage: contextUsages,
           output: response.content,
         };
@@ -173,7 +161,6 @@ export class ToolAgentRuntime {
             `Capability '${call.name}' is not available.`,
           );
           thread = appendConversationItems(thread, failed);
-          conversation = appendConversationItems(conversation, failed);
           continue;
         }
         let arguments_: JsonObject;
@@ -186,7 +173,6 @@ export class ToolAgentRuntime {
             `Invalid arguments for '${call.name}': ${errorMessage(error)}`,
           );
           thread = appendConversationItems(thread, failed);
-          conversation = appendConversationItems(conversation, failed);
           continue;
         }
         const definition = binding.definition;
@@ -207,15 +193,13 @@ export class ToolAgentRuntime {
           await context.events.emit({ type: 'review-required', review });
           return {
             status: 'awaiting-review',
-            conversation,
-            modelThread: thread,
+            conversation: thread,
             contextUsage: contextUsages,
             review,
           };
         }
         const result = await this.#invoke(invocation, context, agent.scope.skills);
         thread = appendConversationItems(thread, result);
-        conversation = appendConversationItems(conversation, result);
       }
     }
     throw new DagentError(

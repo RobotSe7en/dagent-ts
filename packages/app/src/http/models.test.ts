@@ -42,6 +42,8 @@ describe('model provider resources', () => {
         model: 'secondary-model',
         apiKey: 'managed-secret',
         apiKeyAction: 'replace',
+        streamIncludeUsage: true,
+        extraRequestArgs: { temperature: 0 },
       },
     });
     const updated = await application.server.inject({
@@ -53,6 +55,8 @@ describe('model provider resources', () => {
         baseURL: 'https://secondary.example/v1',
         model: 'secondary-model-v2',
         apiKeyAction: 'preserve',
+        streamIncludeUsage: true,
+        extraRequestArgs: { temperature: 0.2 },
       },
     });
     const activated = await application.server.inject({
@@ -96,7 +100,13 @@ describe('model provider resources', () => {
     });
     expect(JSON.stringify(created.json())).not.toContain('managed-secret');
     expect(updated.json()).toMatchObject({
-      model: { name: 'Updated secondary', model: 'secondary-model-v2', apiKeySaved: true },
+      model: {
+        name: 'Updated secondary',
+        model: 'secondary-model-v2',
+        apiKeySaved: true,
+        streamIncludeUsage: true,
+        extraRequestArgs: { temperature: 0.2 },
+      },
     });
     expect(activated.json()).toMatchObject({ activeModelId: 'secondary' });
     expect(deleteActive.statusCode).toBe(409);

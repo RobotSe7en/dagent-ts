@@ -6,6 +6,9 @@ const provider = new OpenAICompatibleProvider({
   baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKeyEnv: 'OPENAI_API_KEY',
+  streamIncludeUsage: false,
+  contextWindowTokens: 128_000,
+  outputReserveTokens: 8192,
 });
 
 const echo = tool({

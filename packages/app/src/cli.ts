@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { OpenAICompatibleProvider } from 'dagent-ai/providers/openai-compatible';
 
+import packageMetadata from '../package.json' with { type: 'json' };
 import { appConfigSchema, loadAppConfig } from './config.js';
 import { createApplication } from './http/server.js';
 
@@ -20,7 +21,7 @@ const { positionals, values } = parseArgs({
 });
 
 if (values.version === true) {
-  process.stdout.write('dagent-ai-app 0.1.0\n');
+  process.stdout.write(`dagent-ai-app ${packageMetadata.version}\n`);
   process.exit(0);
 }
 
@@ -47,8 +48,13 @@ const provider = new OpenAICompatibleProvider({
   ...(config.provider.apiKey === undefined
     ? { apiKeyEnv: config.provider.apiKeyEnv }
     : { apiKey: config.provider.apiKey }),
+  timeoutMs: config.provider.timeoutMs,
+  ...(config.provider.reasoning === undefined ? {} : { reasoning: config.provider.reasoning }),
+  streamIncludeUsage: config.provider.streamIncludeUsage,
   contextWindowTokens: config.provider.contextWindowTokens,
   outputReserveTokens: config.provider.outputReserveTokens,
+  extraRequestArgs: config.provider.extraRequestArgs,
+  extraBody: config.provider.extraBody,
 });
 const application = await createApplication({ config, provider });
 await application.server.listen({ host: config.host, port: config.port });

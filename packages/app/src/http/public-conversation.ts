@@ -1,6 +1,7 @@
 import type { ConversationItem } from 'dagent-ai';
 
 import type { Conversation } from '../database/repositories.js';
+import { requireConversationState } from '../database/repositories.js';
 
 export function publicConversationSummary(conversation: Conversation) {
   return {
@@ -8,6 +9,7 @@ export function publicConversationSummary(conversation: Conversation) {
     projectId: conversation.projectId,
     title: conversation.title,
     kind: conversation.kind,
+    schemaVersion: conversation.schemaVersion,
     revision: conversation.revision,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
@@ -15,14 +17,14 @@ export function publicConversationSummary(conversation: Conversation) {
 }
 
 export function publicConversation(conversation: Conversation) {
+  const state = requireConversationState(conversation);
   return {
     ...publicConversationSummary(conversation),
-    conversation: publicConversationState(conversation.conversation),
-    contextUsage: conversation.contextUsage,
+    conversation: publicConversationState(state),
   };
 }
 
-export function publicConversationState(conversation: Conversation['conversation']) {
+export function publicConversationState(conversation: ReturnType<typeof requireConversationState>) {
   return {
     ...conversation,
     items: conversation.items

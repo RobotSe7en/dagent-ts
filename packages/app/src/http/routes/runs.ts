@@ -75,7 +75,12 @@ export function registerRunRoutes(
     const { id } = runParametersSchema.parse(request.params);
     const run = await repository.getRun(id);
     if (run === undefined) return notFound(reply, 'Run');
-    if (run.status === 'running' || run.status === 'pending' || run.status === 'planning') {
+    if (
+      run.status === 'running' ||
+      run.status === 'pending' ||
+      run.status === 'planning' ||
+      run.status === 'resuming'
+    ) {
       return reply.status(409).send({
         error: { code: 'RUN_ACTIVE', message: 'An active run cannot be deleted.' },
       });

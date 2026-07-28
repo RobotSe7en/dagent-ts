@@ -3,7 +3,7 @@ import { runCheckpointSchema } from 'dagent-ai/contracts';
 
 import type { AppRepository, StoredRun } from '../database/repositories.js';
 
-const activeStatuses = new Set(['pending', 'planning', 'running']);
+const activeStatuses = new Set(['pending', 'planning', 'running', 'resuming']);
 
 export class RunRecoveryService {
   public constructor(private readonly repository: AppRepository) {}

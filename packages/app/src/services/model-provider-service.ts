@@ -30,6 +30,8 @@ export type ModelProviderInput = {
   readonly contextWindowTokens: number;
   readonly outputReserveTokens: number;
   readonly reasoning?: ModelProviderConfig['reasoning'] | undefined;
+  readonly streamIncludeUsage: boolean;
+  readonly extraRequestArgs: JsonObject;
   readonly extraBody: JsonObject;
 };
 
@@ -65,7 +67,10 @@ export class ModelProviderService {
       timeoutMs: 60_000,
       contextWindowTokens: this.config.contextWindowTokens,
       outputReserveTokens: this.config.outputReserveTokens,
-      extraBody: {},
+      ...(this.config.reasoning === undefined ? {} : { reasoning: this.config.reasoning }),
+      streamIncludeUsage: this.config.streamIncludeUsage,
+      extraRequestArgs: this.config.extraRequestArgs,
+      extraBody: this.config.extraBody,
     });
     const active =
       (await this.repository.list()).find((model) => model.active) ??
@@ -194,7 +199,9 @@ export class ModelProviderService {
         ...(config.reasoning === undefined
           ? {}
           : { reasoning: normalizeReasoning(config.reasoning) }),
+        streamIncludeUsage: config.streamIncludeUsage,
         extraBody: config.extraBody,
+        extraRequestArgs: config.extraRequestArgs,
       }),
     );
   }
@@ -220,6 +227,8 @@ function toWrite(
     contextWindowTokens: input.contextWindowTokens,
     outputReserveTokens: input.outputReserveTokens,
     ...(input.reasoning === undefined ? {} : { reasoning: input.reasoning }),
+    streamIncludeUsage: input.streamIncludeUsage,
+    extraRequestArgs: input.extraRequestArgs,
     extraBody: input.extraBody,
   };
 }
