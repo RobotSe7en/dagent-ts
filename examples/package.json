@@ -1,0 +1,13 @@
+{
+  "name": "@dagent/examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit --pretty false"
+  },
+  "dependencies": {
+    "dagent-ai": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

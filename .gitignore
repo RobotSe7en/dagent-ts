@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.dagent-ts/
+*.tsbuildinfo
+apps/web/.vite/
+packages/app/data/
+reference/
+.env

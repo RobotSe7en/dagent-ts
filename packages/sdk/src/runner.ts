@@ -1,0 +1,1253 @@
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import { z } from 'zod';
+
+import { CapabilityCatalog } from './capabilities/catalog.js';
+import type { CapabilityBinding } from './capabilities/tool.js';
+import {
+  appendConversationItems,
+  assistantMessageSchema,
+  artifactStatesSchema,
+  conversationStateSchema,
+  contextPolicySchema,
+  createRunId,
+  createReviewId,
+  dagNodeResultSchema,
+  executionLimitsSchema,
+  nowTimestamp,
+  pendingReviewSchema,
+  resolvedRunPlanSchema,
+  resultStoragePolicySchema,
+  reviewDecisionSchema,
+  runCheckpointSchema,
+  runStateSchema,
+  runTargetSchema,
+  validationPolicySchema,
+  validationRecordSchema,
+  formatValidationFeedback,
+  storedContentText,
+} from './contracts/index.js';
+import type {
+  AgentProfile,
+  AutoAgent,
+  ArtifactStates,
+  ArtifactUpload,
+  Attachment,
+  CapabilityDefinition,
+  ContextPolicy,
+  ConversationState,
+  DAGSpec,
+  DagAgent,
+  ExecutionLimits,
+  JsonObject,
+  JsonValue,
+  ResolvedRunPlan,
+  ResultStoragePolicy,
+  ReviewDecision,
+  RunCheckpoint,
+  RunEvent,
+  RunId,
+  RunOutcome,
+  RunState,
+  RunTarget,
+  ToolAgent,
+  ValidationPolicy,
+  ValidationRecord,
+} from './contracts/index.js';
+import { assertValidDag } from './domain/dag-validation.js';
+import { DagentError, errorMessage } from './errors.js';
+import { sha256 } from './internal/stable-json.js';
+import { McpManager } from './mcp/index.js';
+import type { McpServerConfig } from './mcp/index.js';
+import type { ChatProvider } from './providers/provider.js';
+import { ValidatorAgent } from './profiles/validator-agent.js';
+import { AsyncEventQueue } from './runtime/async-event-queue.js';
+import { ArtifactWorkspace } from './runtime/artifacts.js';
+import { DagExecutor } from './runtime/dag-executor.js';
+import { DynamicPlanner } from './runtime/dynamic-planner.js';
+import {
+  ConversationResourceStore,
+  materializeInputUploads,
+} from './runtime/conversation-resources.js';
+import { RunEventEmitter } from './runtime/events.js';
+import { ExecutionBudget } from './runtime/execution-budget.js';
+import { ToolAgentRuntime } from './runtime/tool-agent.js';
+import type { AgentLoopResult, RuntimeExecutionContext } from './runtime/types.js';
+import { createSkillCapabilities, SkillStore } from './skills/index.js';
+
+export type RunnerOptions = {
+  readonly provider: ChatProvider;
+  readonly capabilities?: readonly CapabilityBinding[];
+  readonly agents?: readonly (ToolAgent | DagAgent | AutoAgent)[];
+  readonly workspace?: string;
+  readonly limits?: Partial<ExecutionLimits>;
+  readonly context?: Partial<ContextPolicy>;
+  readonly resultStorage?: Partial<ResultStoragePolicy>;
+  readonly contextWindowTokens?: number;
+  readonly outputReserveTokens?: number;
+  readonly validation?: {
+    readonly enabled?: boolean;
+    readonly maxRetries?: number;
+    readonly profile?: AgentProfile;
+  };
+  readonly skillRoots?: readonly string[];
+  readonly managedSkillRoot?: string;
+};
+
+export type AgentRunInput = {
+  readonly prompt: string;
+  readonly conversation?: ConversationState;
+  readonly uploads?: readonly ArtifactUpload[];
+};
+
+export type StaticDagRunInput = {
+  readonly graphInput?: JsonObject;
+  readonly artifactUploads?: Readonly<Record<string, readonly ArtifactUpload[]>>;
+};
+
+export type RunInput = AgentRunInput | StaticDagRunInput;
+type PreparedAgentRunInput = Omit<AgentRunInput, 'uploads'> & {
+  readonly attachments: readonly Attachment[];
+};
+type PreparedRunInput = PreparedAgentRunInput | StaticDagRunInput;
+
+export type RunOptions = {
+  readonly workspacePath?: string;
+  readonly signal?: AbortSignal;
+  readonly limits?: Partial<ExecutionLimits>;
+};
+
+export class Runner implements AsyncDisposable {
+  public readonly catalog: CapabilityCatalog;
+  public readonly skills: SkillStore;
+  public readonly mcp: McpManager;
+  readonly #provider: ChatProvider;
+  readonly #agents = new Map<string, ToolAgent | DagAgent | AutoAgent>();
+  readonly #workspace: string;
+  readonly #conversationResources: ConversationResourceStore;
+  readonly #limits: ExecutionLimits;
+  readonly #context: ContextPolicy;
+  readonly #resultStorage: ResultStoragePolicy;
+  readonly #contextWindowTokens: number | undefined;
+  readonly #outputReserveTokens: number | undefined;
+  #validation: ValidationPolicy;
+  readonly #checkpoints = new Map<RunId, RunCheckpoint>();
+  readonly #active = new Map<RunId, AbortController>();
+  readonly #consumedReviews = new Set<string>();
+  #closed = false;
+
+  public constructor(options: RunnerOptions) {
+    this.#provider = options.provider;
+    this.skills = new SkillStore({
+      ...(options.skillRoots === undefined ? {} : { roots: options.skillRoots }),
+      ...(options.managedSkillRoot === undefined ? {} : { managedRoot: options.managedSkillRoot }),
+    });
+    this.mcp = new McpManager();
+    this.catalog = new CapabilityCatalog(createSkillCapabilities(this.skills));
+    for (const binding of options.capabilities ?? []) this.catalog.replace(binding);
+    this.#workspace = resolve(options.workspace ?? '.dagent-ts');
+    this.#conversationResources = new ConversationResourceStore(this.#workspace);
+    this.#limits = executionLimitsSchema.parse(options.limits ?? {});
+    this.#context = contextPolicySchema.parse(options.context ?? {});
+    this.#resultStorage = resultStoragePolicySchema.parse(options.resultStorage ?? {});
+    this.#contextWindowTokens = options.contextWindowTokens;
+    this.#outputReserveTokens = options.outputReserveTokens;
+    this.#validation = validationPolicySchema.parse(options.validation ?? {});
+    for (const agent of options.agents ?? []) this.registerAgent(agent);
+  }
+
+  public get workspacePath(): string {
+    return this.#workspace;
+  }
+
+  public get validationPolicy(): ValidationPolicy {
+    return this.#validation;
+  }
+
+  public setValidationEnabled(enabled: boolean): ValidationPolicy {
+    this.#assertOpen();
+    this.#validation = validationPolicySchema.parse({
+      ...this.#validation,
+      enabled,
+    });
+    return this.#validation;
+  }
+
+  public registerCapability(binding: CapabilityBinding): void {
+    this.#assertOpen();
+    this.catalog.register(binding);
+  }
+
+  public async connectMcp(config: McpServerConfig): Promise<readonly CapabilityBinding[]> {
+    this.#assertOpen();
+    const bindings = await this.mcp.connect(config);
+    const registered: string[] = [];
+    try {
+      const ids = new Set<string>();
+      const collision = bindings.find(({ definition }) => {
+        if (ids.has(definition.id) || this.catalog.get(definition.id) !== undefined) return true;
+        ids.add(definition.id);
+        return false;
+      });
+      if (collision !== undefined) {
+        throw new DagentError(
+          'INVALID_INPUT',
+          `MCP capability '${collision.definition.id}' is already registered.`,
+        );
+      }
+      for (const binding of bindings) {
+        this.catalog.register(binding);
+        registered.push(binding.definition.id);
+      }
+      return bindings;
+    } catch (error) {
+      for (const id of registered) this.catalog.unregister(id);
+      await this.mcp.disconnect(config.name).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  public async disconnectMcp(name: string): Promise<boolean> {
+    this.#assertOpen();
+    const connected = this.mcp.list().find(({ config }) => config.name === name);
+    if (connected === undefined) return false;
+    try {
+      return await this.mcp.disconnect(name);
+    } finally {
+      for (const binding of connected.capabilities) {
+        this.catalog.unregister(binding.definition.id);
+      }
+    }
+  }
+
+  public registerAgent(agent: ToolAgent | DagAgent | AutoAgent): void {
+    this.#assertOpen();
+    const parsed = parseAgent(agent);
+    if (this.#agents.has(parsed.id)) {
+      throw new DagentError('INVALID_INPUT', `Agent '${parsed.id}' is already registered.`);
+    }
+    this.#agents.set(parsed.id, parsed);
+  }
+
+  public replaceAgent(agent: ToolAgent | DagAgent | AutoAgent): void {
+    this.#assertOpen();
+    const parsed = parseAgent(agent);
+    this.#agents.set(parsed.id, parsed);
+  }
+
+  public unregisterAgent(id: string): boolean {
+    this.#assertOpen();
+    return this.#agents.delete(id);
+  }
+
+  public agent(id: string): ToolAgent | DagAgent | AutoAgent | undefined {
+    return this.#agents.get(id);
+  }
+
+  public agents(): readonly (ToolAgent | DagAgent | AutoAgent)[] {
+    return [...this.#agents.values()];
+  }
+
+  public checkpoint(runId: RunId): RunCheckpoint | undefined {
+    return this.#checkpoints.get(runId);
+  }
+
+  public cancel(runId: RunId, reason = 'Cancelled by caller.'): boolean {
+    const controller = this.#active.get(runId);
+    if (controller === undefined) return false;
+    controller.abort(new DagentError('ABORTED', reason));
+    return true;
+  }
+
+  public async run(
+    targetValue: RunTarget,
+    input: RunInput,
+    options: RunOptions = {},
+  ): Promise<RunOutcome> {
+    return this.#start(targetValue, input, options);
+  }
+
+  public stream(
+    targetValue: RunTarget,
+    input: RunInput,
+    options: RunOptions = {},
+  ): AsyncIterable<RunEvent> {
+    const queue = new AsyncEventQueue<RunEvent>();
+    void this.#start(targetValue, input, options, (event) => {
+      queue.push(event);
+    })
+      .then(() => {
+        queue.close();
+      })
+      .catch((error: unknown) => {
+        queue.fail(error);
+      });
+    return queue;
+  }
+
+  public async resume(
+    checkpointValue: RunCheckpoint,
+    decisionValue: ReviewDecision,
+    options: Omit<RunOptions, 'workspacePath' | 'limits'> = {},
+  ): Promise<RunOutcome> {
+    return this.#resume(checkpointValue, decisionValue, options);
+  }
+
+  public resumeStream(
+    checkpointValue: RunCheckpoint,
+    decisionValue: ReviewDecision,
+    options: Omit<RunOptions, 'workspacePath' | 'limits'> = {},
+  ): AsyncIterable<RunEvent> {
+    const queue = new AsyncEventQueue<RunEvent>();
+    void this.#resume(checkpointValue, decisionValue, options, (event) => {
+      queue.push(event);
+    })
+      .then(() => {
+        queue.close();
+      })
+      .catch((error: unknown) => {
+        queue.fail(error);
+      });
+    return queue;
+  }
+
+  async #resume(
+    checkpointValue: RunCheckpoint,
+    decisionValue: ReviewDecision,
+    options: Omit<RunOptions, 'workspacePath' | 'limits'>,
+    listener?: (event: RunEvent) => void | Promise<void>,
+  ): Promise<RunOutcome> {
+    this.#assertOpen();
+    const checkpoint = validateCheckpoint(checkpointValue, this.catalog);
+    const decision = reviewDecisionSchema.parse(decisionValue);
+    const review = checkpoint.state.pendingReview;
+    if (review === undefined) {
+      throw new DagentError('CHECKPOINT_MISMATCH', 'Checkpoint is not awaiting review.');
+    }
+    if (review.id !== decision.reviewId || review.revision !== decision.revision) {
+      throw new DagentError('STALE_REVIEW', 'Review decision does not match checkpoint revision.');
+    }
+    const reviewKey = `${checkpoint.state.runId}:${review.id}:${review.revision}`;
+    if (this.#consumedReviews.has(reviewKey)) {
+      throw new DagentError(
+        'STALE_REVIEW',
+        `Checkpoint review '${review.id}' has already been consumed.`,
+      );
+    }
+    this.#consumedReviews.add(reviewKey);
+    const target = runTargetSchema.parse(checkpoint.plan.target);
+    const controller = new AbortController();
+    const signal =
+      options.signal === undefined
+        ? controller.signal
+        : AbortSignal.any([controller.signal, options.signal]);
+    this.#active.set(checkpoint.state.runId, controller);
+    const emitter = new RunEventEmitter(checkpoint.state.runId, listener);
+    const budget = new ExecutionBudget(checkpoint.plan.limits, checkpoint.usage);
+    const context = this.#runtimeContext(
+      checkpoint.state.runId,
+      checkpoint.state.workspacePath,
+      signal,
+      emitter,
+      budget,
+      checkpoint.plan,
+    );
+    try {
+      if (decision.action === 'reject' && review.kind === 'dag-review') {
+        const state = runStateSchema.parse({
+          ...checkpoint.state,
+          status: 'cancelled',
+          pendingReview: undefined,
+          error: decision.reason || 'DAG execution was rejected.',
+          revision: checkpoint.state.revision + 1,
+          updatedAt: nowTimestamp(),
+        });
+        return this.#finalize(state, checkpoint.plan, budget, emitter);
+      }
+      if (review.kind === 'capability-review') {
+        if (review.invocation === undefined) {
+          throw new DagentError(
+            'CHECKPOINT_MISMATCH',
+            'Capability review has no pending invocation.',
+          );
+        }
+        const agent = capabilityResumeAgent(target);
+        const result = await new ToolAgentRuntime().run(
+          agent,
+          {
+            ...(checkpoint.state.conversation === undefined
+              ? {}
+              : { conversation: checkpoint.state.conversation }),
+            ...(checkpoint.state.modelThread === undefined
+              ? {}
+              : { modelThread: checkpoint.state.modelThread }),
+          },
+          context,
+          { invocation: review.invocation, decision },
+        );
+        return this.#continueToolAgent(
+          agent,
+          lastUserRequest(result.conversation),
+          result,
+          checkpoint.state,
+          checkpoint.plan,
+          context,
+        );
+      }
+      const graph = assertValidDag(
+        decision.replacementGraph ?? review.proposedGraph ?? checkpoint.state.graph,
+      );
+      return this.#executeApprovedGraph(
+        checkpoint.state,
+        checkpoint.plan,
+        budget,
+        emitter,
+        context,
+        graph,
+      );
+    } catch (error) {
+      return this.#failedOutcome(checkpoint.state, checkpoint.plan, budget, emitter, error);
+    } finally {
+      this.#active.delete(checkpoint.state.runId);
+    }
+  }
+
+  public async close(): Promise<void> {
+    if (this.#closed) return;
+    for (const controller of this.#active.values()) {
+      controller.abort(new DagentError('ABORTED', 'Runner is closing.'));
+    }
+    this.#active.clear();
+    await this.mcp.close();
+    this.#closed = true;
+  }
+
+  public async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+
+  async #start(
+    targetValue: RunTarget,
+    input: RunInput,
+    options: RunOptions,
+    listener?: (event: RunEvent) => void | Promise<void>,
+  ): Promise<RunOutcome> {
+    this.#assertOpen();
+    const target = runTargetSchema.parse(targetValue);
+    if (isAgentInput(input)) assertAgentHistory(input);
+    const runId = createRunId();
+    const controller = new AbortController();
+    const signal =
+      options.signal === undefined
+        ? controller.signal
+        : AbortSignal.any([controller.signal, options.signal]);
+    this.#active.set(runId, controller);
+    const workspacePath = resolve(
+      options.workspacePath ?? this.#workspace,
+      options.workspacePath === undefined ? `runs/${runId}` : '',
+    );
+    await mkdir(workspacePath, { recursive: true });
+    const preparedInput: PreparedRunInput = isAgentInput(input)
+      ? await this.#prepareAgentInput(input, workspacePath)
+      : input;
+    const emitter = new RunEventEmitter(runId, listener);
+    const limits = executionLimitsSchema.parse({ ...this.#limits, ...options.limits });
+    const budget = new ExecutionBudget(limits);
+    const plan = createResolvedPlan(
+      target,
+      this.catalog,
+      limits,
+      this.#contextForTarget(target),
+      this.#resultStorage,
+      this.#contextWindowTokens ??
+        readProviderNumber(this.#provider, 'contextWindowTokens', 32_768),
+      this.#outputReserveTokens ?? readProviderNumber(this.#provider, 'outputReserveTokens', 4096),
+      this.#validation,
+    );
+    const timestamp = nowTimestamp();
+    const initialState = runStateSchema.parse({
+      schemaVersion: 3,
+      runId,
+      status: 'pending',
+      targetKind: target.kind,
+      ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
+        ? { conversation: preparedInput.conversation }
+        : {}),
+      ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
+        ? { modelThread: preparedInput.conversation }
+        : {}),
+      graphInput: isAgentInput(preparedInput) ? {} : (preparedInput.graphInput ?? {}),
+      nodeResults: {},
+      workspacePath,
+      revision: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      contextUsage: [],
+    });
+    const context = this.#runtimeContext(runId, workspacePath, signal, emitter, budget, plan);
+    try {
+      await emitter.emit({ type: 'run-started' });
+      const outcome = await this.#dispatch(target, preparedInput, initialState, plan, context);
+      return outcome;
+    } catch (error) {
+      return this.#failedOutcome(initialState, plan, budget, emitter, error);
+    } finally {
+      this.#active.delete(runId);
+    }
+  }
+
+  async #dispatch(
+    target: RunTarget,
+    input: PreparedRunInput,
+    state: RunState,
+    plan: ResolvedRunPlan,
+    context: RuntimeExecutionContext,
+  ): Promise<RunOutcome> {
+    switch (target.kind) {
+      case 'tool-agent': {
+        const agentInput = requireAgentInput(input);
+        const result = await new ToolAgentRuntime().run(
+          target,
+          {
+            prompt: agentInput.prompt,
+            ...(agentInput.conversation === undefined
+              ? {}
+              : { conversation: agentInput.conversation }),
+            attachments: agentInput.attachments,
+          },
+          context,
+        );
+        return this.#continueToolAgent(target, agentInput.prompt, result, state, plan, context);
+      }
+      case 'dag-agent':
+        return this.#runDynamic(target, requireAgentInput(input), state, plan, context);
+      case 'auto-agent': {
+        const route = await this.#route(target, requireAgentInput(input), context);
+        return route === 'tool'
+          ? this.#dispatch(target.toolAgent, input, state, plan, context)
+          : this.#runDynamic(target.dagAgent, requireAgentInput(input), state, plan, context);
+      }
+      case 'static-dag': {
+        const graphInput = isAgentInput(input) ? {} : (input.graphInput ?? {});
+        const artifacts = await ArtifactWorkspace.open({
+          workspacePath: state.workspacePath,
+          artifacts: target.graph.artifacts,
+          previousStates: state.artifactStates,
+        });
+        if (!isAgentInput(input) && input.artifactUploads !== undefined) {
+          await artifacts.materialize(input.artifactUploads);
+        }
+        const prepared = runStateSchema.parse({
+          ...state,
+          graph: target.graph,
+          graphInput,
+          artifactStates: artifacts.snapshot(),
+          revision: state.revision + 1,
+          updatedAt: nowTimestamp(),
+        });
+        if (requiresDagReview(target.reviewLevel, target.graph, this.catalog)) {
+          return this.#awaitDagReview(prepared, plan, context, target.graph, 'Review static DAG');
+        }
+        const executing = runStateSchema.parse({
+          ...prepared,
+          status: 'running',
+          revision: prepared.revision + 1,
+          updatedAt: nowTimestamp(),
+        });
+        return this.#executeApprovedGraph(
+          executing,
+          plan,
+          context.budget,
+          context.events,
+          context,
+          target.graph,
+        );
+      }
+    }
+  }
+
+  async #runDynamic(
+    agent: DagAgent,
+    input: PreparedAgentRunInput,
+    state: RunState,
+    plan: ResolvedRunPlan,
+    context: RuntimeExecutionContext,
+  ): Promise<RunOutcome> {
+    const planner = new DynamicPlanner();
+    let planned = await planner.plan(
+      agent,
+      {
+        prompt: input.prompt,
+        ...(input.conversation === undefined ? {} : { conversation: input.conversation }),
+        ...(isPreparedAgentInput(input) ? { attachments: input.attachments } : {}),
+      },
+      context,
+    );
+    let currentState = state;
+    let completedResults: RunState['nodeResults'] = {};
+    const usages = [...state.contextUsage, ...planned.contextUsage];
+    for (let attempt = 0; attempt <= agent.maxReplans; attempt += 1) {
+      const plannedState = runStateSchema.parse({
+        ...currentState,
+        status: 'planning',
+        conversation: planned.conversation,
+        modelThread: planned.modelThread,
+        contextUsage: usages,
+        graph: planned.proposal.graph,
+        graphInput: { prompt: input.prompt },
+        nodeResults: completedResults,
+        revision: currentState.revision + 1,
+        updatedAt: nowTimestamp(),
+      });
+      if (requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog)) {
+        return this.#awaitDagReview(
+          plannedState,
+          plan,
+          context,
+          planned.proposal.graph,
+          planned.proposal.rationale || 'Review dynamic DAG',
+        );
+      }
+      try {
+        return await this.#executeApprovedGraph(
+          plannedState,
+          plan,
+          context.budget,
+          context.events,
+          context,
+          planned.proposal.graph,
+        );
+      } catch (error) {
+        if (attempt >= agent.maxReplans || context.signal.aborted) throw error;
+        completedResults = completedNodeResults(error);
+        currentState = partialRunState(error, state.runId) ?? plannedState;
+        planned = await planner.plan(
+          agent,
+          {
+            prompt: input.prompt,
+            conversation: planned.conversation,
+            modelThread: planned.modelThread,
+            previousGraph: planned.proposal.graph,
+            failure: errorMessage(error),
+            completedNodeIds: Object.keys(completedResults),
+          },
+          context,
+        );
+        usages.push(...planned.contextUsage);
+      }
+    }
+    throw new DagentError('DAG_EXECUTION_FAILED', 'Dynamic DAG exhausted replans.');
+  }
+
+  async #executeApprovedGraph(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    budget: ExecutionBudget,
+    emitter: RunEventEmitter,
+    context: RuntimeExecutionContext,
+    graph: DAGSpec,
+  ): Promise<RunOutcome> {
+    const executor = new DagExecutor(async (agentId, prompt, nestedContext) => {
+      const agent = this.#agents.get(agentId);
+      if (agent === undefined) {
+        throw new DagentError('INVALID_INPUT', `Agent '${agentId}' is not registered.`);
+      }
+      if (agent.kind !== 'tool-agent') {
+        throw new DagentError(
+          'INVALID_INPUT',
+          `Nested agent '${agentId}' must currently be a ToolAgent.`,
+        );
+      }
+      const result = await new ToolAgentRuntime().run(agent, { prompt }, nestedContext);
+      if (result.status === 'awaiting-review') {
+        throw new DagentError('REVIEW_REQUIRED', `Nested agent '${agentId}' requires review.`);
+      }
+      return result.output;
+    });
+    let result: Awaited<ReturnType<DagExecutor['execute']>>;
+    try {
+      result = await executor.execute(state.graphInput, graph, context, {
+        previousResults: state.nodeResults,
+        previousArtifactStates: state.artifactStates,
+      });
+    } catch (error) {
+      const details = error instanceof DagentError ? error.details : {};
+      const partialState = runStateSchema.parse({
+        ...state,
+        status: 'failed',
+        graph,
+        nodeResults: allNodeResults(error, state.nodeResults),
+        artifactStates: artifactStatesFromError(error, state.artifactStates),
+        error: errorMessage(error),
+        pendingReview: undefined,
+        revision: state.revision + 1,
+        updatedAt: nowTimestamp(),
+      });
+      throw new DagentError(
+        error instanceof DagentError ? error.code : 'DAG_EXECUTION_FAILED',
+        errorMessage(error),
+        {
+          cause: error,
+          details: { ...details, partialState },
+        },
+      );
+    }
+    let conversation = state.conversation;
+    let modelThread = state.modelThread;
+    if (conversation !== undefined) {
+      const assistant = assistantMessageSchema.parse({
+        type: 'assistant',
+        runId: state.runId,
+        content: typeof result.output === 'string' ? result.output : JSON.stringify(result.output),
+        scope: 'conversation',
+        visibility: 'user',
+      });
+      conversation = appendConversationItems(conversation, assistant);
+      if (modelThread !== undefined) {
+        modelThread = appendConversationItems(modelThread, assistant);
+      }
+    }
+    const completed = runStateSchema.parse({
+      ...state,
+      status: 'completed',
+      graph,
+      nodeResults: result.nodeResults,
+      artifactStates: result.artifactStates,
+      output: result.output,
+      ...(conversation === undefined ? {} : { conversation }),
+      ...(modelThread === undefined ? {} : { modelThread }),
+      pendingReview: undefined,
+      revision: state.revision + 1,
+      updatedAt: nowTimestamp(),
+    });
+    return this.#finalize(completed, plan, budget, emitter);
+  }
+
+  async #awaitDagReview(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    context: RuntimeExecutionContext,
+    graph: DAGSpec,
+    summary: string,
+  ): Promise<RunOutcome> {
+    const review = pendingReviewSchema.parse({
+      id: createReviewId(),
+      revision: state.revision + 1,
+      kind: 'dag-review',
+      summary,
+      proposedGraph: graph,
+      createdAt: nowTimestamp(),
+    });
+    await context.events.emit({ type: 'review-required', review });
+    const awaiting = runStateSchema.parse({
+      ...state,
+      status: 'awaiting-review',
+      graph,
+      pendingReview: review,
+      revision: review.revision,
+      updatedAt: nowTimestamp(),
+    });
+    return this.#finalize(awaiting, plan, context.budget, context.events);
+  }
+
+  async #agentLoopOutcome(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    budget: ExecutionBudget,
+    emitter: RunEventEmitter,
+    result: AgentLoopResult,
+    options: {
+      readonly validations?: readonly ValidationRecord[];
+      readonly contextUsage?: RunState['contextUsage'];
+    } = {},
+  ): Promise<RunOutcome> {
+    const nextState = runStateSchema.parse({
+      ...state,
+      status: result.status === 'completed' ? 'completed' : 'awaiting-review',
+      conversation: result.conversation,
+      modelThread: result.modelThread,
+      contextUsage: options.contextUsage ?? [...state.contextUsage, ...result.contextUsage],
+      validations: options.validations ?? state.validations,
+      ...(result.status === 'completed'
+        ? { output: result.output, pendingReview: undefined }
+        : { pendingReview: result.review }),
+      revision: state.revision + 1,
+      updatedAt: nowTimestamp(),
+    });
+    return this.#finalize(nextState, plan, budget, emitter);
+  }
+
+  async #continueToolAgent(
+    agent: ToolAgent,
+    userRequest: string,
+    initialResult: AgentLoopResult,
+    state: RunState,
+    plan: ResolvedRunPlan,
+    context: RuntimeExecutionContext,
+  ): Promise<RunOutcome> {
+    let result = initialResult;
+    const validations = [...state.validations];
+    let contextUsage = [...state.contextUsage, ...result.contextUsage];
+
+    while (result.status === 'completed' && plan.validation.enabled) {
+      const executionContext = toolExecutionContext(result.modelThread);
+      if (executionContext.length === 0) break;
+      const attempt = validations.length;
+      await context.events.emit({ type: 'validation-started', attempt });
+      const validator = new ValidatorAgent({
+        provider: context.provider,
+        profile: requireValidationProfile(plan.validation),
+        reserveModelCall: (signal) => context.budget.reserveModelCall(signal),
+      });
+      const validation = await validator.validate({
+        userRequest,
+        finalAnswer: result.output,
+        executionContext,
+        workspacePath: context.workspacePath,
+        signal: context.signal,
+      });
+      const record = validationRecordSchema.parse({
+        attempt,
+        result: validation,
+        createdAt: nowTimestamp(),
+      });
+      validations.push(record);
+      const previousFailures = validations
+        .slice(0, -1)
+        .filter(({ result: previous }) => !previous.passed).length;
+      const willRetry = !validation.passed && previousFailures < plan.validation.maxRetries;
+      await context.events.emit({
+        type: 'validation-finished',
+        attempt,
+        result: validation,
+        willRetry,
+      });
+      if (!willRetry) break;
+
+      result = await new ToolAgentRuntime().run(
+        agent,
+        {
+          prompt: formatValidationFeedback(validation),
+          promptKind: 'internal-continuation',
+          promptScope: 'validator',
+          conversation: removeRunAssistant(result.conversation, state.runId),
+          modelThread: result.modelThread,
+        },
+        context,
+      );
+      contextUsage = [...contextUsage, ...result.contextUsage];
+    }
+
+    return this.#agentLoopOutcome(state, plan, context.budget, context.events, result, {
+      validations,
+      contextUsage,
+    });
+  }
+
+  async #route(
+    agent: AutoAgent,
+    input: AgentRunInput,
+    context: RuntimeExecutionContext,
+  ): Promise<'tool' | 'dag'> {
+    context.budget.reserveModelCall(context.signal);
+    const schema = z.object({ route: z.enum(['tool', 'dag']), reason: z.string() }).strict();
+    const response = await context.provider.chat(
+      {
+        messages: [
+          {
+            role: 'system',
+            content: `${agent.systemPrompt}\nChoose "tool" for bounded direct work and "dag" for multi-stage dependency-driven work.`,
+          },
+          { role: 'user', content: input.prompt },
+        ],
+        responseFormat: {
+          name: 'agent_route',
+          schema: z.toJSONSchema(schema),
+          description: 'Execution route.',
+          strict: true,
+        },
+      },
+      { signal: context.signal },
+    );
+    try {
+      return schema.parse(JSON.parse(response.content)).route;
+    } catch {
+      throw new DagentError('PROVIDER_FAILED', 'AutoAgent router returned invalid JSON.');
+    }
+  }
+
+  async #finalize(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    budget: ExecutionBudget,
+    emitter: RunEventEmitter,
+  ): Promise<RunOutcome> {
+    if (
+      state.conversation !== undefined &&
+      (state.status === 'completed' || state.status === 'awaiting-review')
+    ) {
+      await this.#conversationResources.persist(state.conversation, state.workspacePath);
+    }
+    const checkpoint = runCheckpointSchema.parse({
+      schemaVersion: 3,
+      state,
+      plan,
+      usage: budget.snapshot(),
+      createdAt: nowTimestamp(),
+    });
+    this.#checkpoints.set(state.runId, checkpoint);
+    await emitter.emit({ type: 'checkpoint', checkpoint });
+    const status =
+      state.status === 'completed'
+        ? 'completed'
+        : state.status === 'awaiting-review'
+          ? 'awaiting-review'
+          : state.status === 'cancelled'
+            ? 'cancelled'
+            : state.status === 'interrupted'
+              ? 'interrupted'
+              : 'failed';
+    await emitter.emit({ type: 'run-completed', outcome: status });
+    if (status === 'completed') {
+      return {
+        status,
+        state,
+        checkpoint,
+        ...(state.output === undefined ? {} : { output: state.output }),
+      };
+    }
+    if (status === 'awaiting-review') {
+      if (state.pendingReview === undefined) {
+        throw new DagentError(
+          'CHECKPOINT_MISMATCH',
+          'Awaiting-review state has no pending review.',
+        );
+      }
+      return { status, state, checkpoint, review: state.pendingReview };
+    }
+    return {
+      status,
+      state,
+      checkpoint,
+      error: state.error ?? `Run ended with status '${status}'.`,
+    };
+  }
+
+  async #failedOutcome(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    budget: ExecutionBudget,
+    emitter: RunEventEmitter,
+    error: unknown,
+  ): Promise<RunOutcome> {
+    const status =
+      error instanceof DagentError && error.code === 'ABORTED' ? 'cancelled' : 'failed';
+    const partialState = partialRunState(error, state.runId) ?? state;
+    const failed = runStateSchema.parse({
+      ...partialState,
+      status,
+      error: errorMessage(error),
+      pendingReview: undefined,
+      revision: partialState.revision + 1,
+      updatedAt: nowTimestamp(),
+    });
+    return this.#finalize(failed, plan, budget, emitter);
+  }
+
+  async #prepareAgentInput(
+    input: AgentRunInput,
+    workspacePath: string,
+  ): Promise<PreparedAgentRunInput> {
+    const conversation =
+      input.conversation === undefined
+        ? undefined
+        : await this.#conversationResources.materialize(
+            conversationStateSchema.parse(input.conversation),
+            workspacePath,
+          );
+    const attachments = await materializeInputUploads(input.uploads ?? [], workspacePath);
+    return {
+      prompt: input.prompt,
+      ...(conversation === undefined ? {} : { conversation }),
+      attachments,
+    };
+  }
+
+  #runtimeContext(
+    runId: RunId,
+    workspacePath: string,
+    signal: AbortSignal,
+    events: RunEventEmitter,
+    budget: ExecutionBudget,
+    plan: ResolvedRunPlan,
+  ): RuntimeExecutionContext {
+    return {
+      runId,
+      provider: this.#provider,
+      catalog: this.catalog,
+      budget,
+      events,
+      workspacePath,
+      signal,
+      contextPolicy: plan.contextPolicy,
+      resultStoragePolicy: plan.resultStoragePolicy,
+      contextWindowTokens: plan.contextWindowTokens,
+      outputReserveTokens: plan.outputReserveTokens,
+    };
+  }
+
+  #contextForTarget(target: RunTarget): ContextPolicy {
+    return target.kind === 'static-dag' ? this.#context : target.context;
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw new DagentError('INVALID_INPUT', 'Runner is closed.');
+  }
+}
+
+function completedNodeResults(error: unknown): RunState['nodeResults'] {
+  if (!(error instanceof DagentError)) return {};
+  const value = error.details['results'];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([nodeId, candidate]) => {
+      const parsed = dagNodeResultSchema.safeParse(candidate);
+      return parsed.success && parsed.data.status === 'completed'
+        ? [[nodeId, parsed.data] as const]
+        : [];
+    }),
+  );
+}
+
+function allNodeResults(
+  error: unknown,
+  fallback: RunState['nodeResults'],
+): RunState['nodeResults'] {
+  if (!(error instanceof DagentError)) return fallback;
+  const value = error.details['results'];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback;
+  const parsed = Object.fromEntries(
+    Object.entries(value).flatMap(([nodeId, candidate]) => {
+      const result = dagNodeResultSchema.safeParse(candidate);
+      return result.success ? [[nodeId, result.data] as const] : [];
+    }),
+  );
+  return { ...fallback, ...parsed };
+}
+
+function artifactStatesFromError(error: unknown, fallback: ArtifactStates): ArtifactStates {
+  if (!(error instanceof DagentError)) return fallback;
+  const parsed = artifactStatesSchema.safeParse(error.details['artifactStates']);
+  return parsed.success ? parsed.data : fallback;
+}
+
+function partialRunState(error: unknown, runId: RunId): RunState | undefined {
+  if (!(error instanceof DagentError)) return undefined;
+  const parsed = runStateSchema.safeParse(error.details['partialState']);
+  return parsed.success && parsed.data.runId === runId ? parsed.data : undefined;
+}
+
+function lastUserRequest(conversation: ConversationState): string {
+  const message = conversation.items.findLast(
+    (item) => item.type === 'user' && item.visibility === 'user',
+  );
+  if (message?.type !== 'user') {
+    throw new DagentError('CHECKPOINT_MISMATCH', 'Conversation has no public user request.');
+  }
+  return message.content;
+}
+
+function toolExecutionContext(modelThread: ConversationState): string {
+  return modelThread.items
+    .flatMap((item) => {
+      if (item.type !== 'tool-result') return [];
+      const value = item.value === undefined ? '' : `\nValue: ${JSON.stringify(item.value)}`;
+      return [
+        `Capability ${item.capabilityId ?? item.name} (${item.status}):\n${storedContentText(
+          item.content,
+        )}${value}`,
+      ];
+    })
+    .join('\n\n');
+}
+
+function requireValidationProfile(validation: ValidationPolicy): AgentProfile {
+  if (validation.profile === undefined) {
+    throw new DagentError(
+      'CHECKPOINT_MISMATCH',
+      'Enabled result validation has no validator profile.',
+    );
+  }
+  return validation.profile;
+}
+
+function removeRunAssistant(conversation: ConversationState, runId: RunId): ConversationState {
+  const index = conversation.items.findLastIndex(
+    (item) => item.type === 'assistant' && item.runId === runId && item.visibility === 'user',
+  );
+  if (index < 0) return conversation;
+  return conversationStateSchema.parse({
+    ...conversation,
+    revision: conversation.revision + 1,
+    items: conversation.items.filter((_, itemIndex) => itemIndex !== index),
+  });
+}
+
+function createResolvedPlan(
+  target: RunTarget,
+  catalog: CapabilityCatalog,
+  limits: ExecutionLimits,
+  contextPolicy: ContextPolicy,
+  resultStoragePolicy: ResultStoragePolicy,
+  contextWindowTokens: number,
+  outputReserveTokens: number,
+  validation: ValidationPolicy,
+): ResolvedRunPlan {
+  const capabilityIds = targetCapabilityIds(target);
+  const skillIds = target.kind === 'static-dag' ? [] : target.scope.skills;
+  const capabilityFingerprints = Object.fromEntries(
+    capabilityIds.map((id) => [id, capabilityFingerprint(catalog.require(id).definition)]),
+  );
+  const payload = {
+    schemaVersion: 3 as const,
+    target,
+    capabilityIds,
+    capabilityFingerprints,
+    skillIds,
+    limits,
+    contextPolicy,
+    resultStoragePolicy,
+    contextWindowTokens,
+    outputReserveTokens,
+    validation,
+  };
+  return resolvedRunPlanSchema.parse({
+    ...payload,
+    fingerprint: sha256(JSON.parse(JSON.stringify(payload)) as JsonValue),
+  });
+}
+
+function validateCheckpoint(
+  checkpointValue: RunCheckpoint,
+  catalog: CapabilityCatalog,
+): RunCheckpoint {
+  const checkpoint = runCheckpointSchema.parse(checkpointValue);
+  const { fingerprint, ...payload } = checkpoint.plan;
+  const expected = sha256(JSON.parse(JSON.stringify(payload)) as JsonValue);
+  if (expected !== fingerprint) {
+    throw new DagentError('CHECKPOINT_MISMATCH', 'Checkpoint plan fingerprint is invalid.');
+  }
+  for (const capabilityId of checkpoint.plan.capabilityIds) {
+    const binding = catalog.get(capabilityId);
+    if (binding === undefined) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        `Checkpoint capability is not registered: ${capabilityId}`,
+      );
+    }
+    if (!binding.definition.enabled) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        `Checkpoint capability is disabled: ${capabilityId}`,
+      );
+    }
+    if (
+      checkpoint.plan.capabilityFingerprints[capabilityId] !==
+      capabilityFingerprint(binding.definition)
+    ) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        `Checkpoint capability definition changed: ${capabilityId}`,
+      );
+    }
+  }
+  return checkpoint;
+}
+
+function capabilityFingerprint(definition: CapabilityDefinition): string {
+  return sha256(JSON.parse(JSON.stringify(definition)) as JsonValue);
+}
+
+function targetCapabilityIds(target: RunTarget): string[] {
+  if (target.kind === 'static-dag') {
+    return [...new Set(graphCapabilityIds(target.graph))];
+  }
+  if (target.kind === 'auto-agent') {
+    return [
+      ...new Set([
+        ...target.scope.capabilities,
+        ...target.toolAgent.scope.capabilities,
+        ...target.dagAgent.scope.capabilities,
+      ]),
+    ];
+  }
+  return [...target.scope.capabilities];
+}
+
+function isAgentInput(input: RunInput): input is AgentRunInput;
+function isAgentInput(input: PreparedRunInput): input is PreparedAgentRunInput;
+function isAgentInput(input: RunInput | PreparedRunInput): boolean {
+  return 'prompt' in input;
+}
+
+function requireAgentInput(input: PreparedRunInput): PreparedAgentRunInput {
+  if (!isAgentInput(input)) {
+    throw new DagentError('INVALID_INPUT', 'Agent runs require a prompt.');
+  }
+  if (!isPreparedAgentInput(input)) {
+    throw new DagentError('INVALID_INPUT', 'Agent input uploads were not prepared.');
+  }
+  return input;
+}
+
+function assertAgentHistory(input: AgentRunInput): void {
+  if (input.conversation !== undefined) conversationStateSchema.parse(input.conversation);
+}
+
+function isPreparedAgentInput(input: AgentRunInput): input is PreparedAgentRunInput {
+  return 'attachments' in input && Array.isArray(input.attachments);
+}
+
+function requiresDagReview(
+  level: 'never' | 'risky' | 'always',
+  graph: DAGSpec,
+  catalog: CapabilityCatalog,
+): boolean {
+  if (level === 'never') return false;
+  if (level === 'always') return true;
+  return graphCapabilityIds(graph).some((capabilityId) => {
+    const risk = catalog.require(capabilityId).definition.risk;
+    return risk === 'high' || risk === 'critical';
+  });
+}
+
+function graphCapabilityIds(graph: DAGSpec): string[] {
+  return graph.nodes.flatMap((node) => {
+    if (node.kind === 'capability') return [node.capabilityId];
+    if (node.kind === 'agent') return [];
+    return graphCapabilityIds(node.graph);
+  });
+}
+
+function capabilityResumeAgent(target: RunTarget): ToolAgent {
+  if (target.kind === 'tool-agent') return target;
+  if (target.kind === 'auto-agent') return target.toolAgent;
+  throw new DagentError(
+    'CHECKPOINT_MISMATCH',
+    `Target '${target.kind}' cannot resume a capability review.`,
+  );
+}
+
+function parseAgent(agent: ToolAgent | DagAgent | AutoAgent): ToolAgent | DagAgent | AutoAgent {
+  const parsed = runTargetSchema.parse(agent);
+  if (parsed.kind === 'static-dag') {
+    throw new DagentError('INVALID_INPUT', 'Static DAG targets cannot be registered as agents.');
+  }
+  return parsed;
+}
+
+function readProviderNumber(provider: ChatProvider, key: string, fallback: number): number {
+  const value = (provider as unknown as Readonly<Record<string, unknown>>)[key];
+  return typeof value === 'number' ? value : fallback;
+}

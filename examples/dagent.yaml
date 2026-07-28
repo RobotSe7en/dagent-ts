@@ -1,0 +1,36 @@
+workspace: .dagent-ts
+builtins:
+  - files
+  - shell
+  - memory
+
+sandbox:
+  enabled: false
+
+skills:
+  roots:
+    - ./skills
+  managedRoot: ./.dagent-ts/skills
+
+profiles:
+  directory: ./profiles
+
+validation:
+  enabled: false
+  maxRetries: 1
+  profile: validator_agent
+
+limits:
+  maxModelCalls: 50
+  maxCapabilityCalls: 100
+  maxNodeExecutions: 200
+  maxConcurrency: 8
+
+context:
+  compactionTriggerRatio: 0.8
+  keepRecentTurns: 4
+  summaryMaxTokens: 1024
+
+mcpServers: []
+modules: []
+agents: []

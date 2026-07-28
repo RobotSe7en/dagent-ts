@@ -1,0 +1,30 @@
+{
+  "name": "@dagent/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.90.21",
+    "@xyflow/react": "12.10.2",
+    "dagent-ai": "workspace:*",
+    "lucide-react": "1.22.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "10.1.0",
+    "react-router-dom": "7.13.1",
+    "remark-gfm": "4.0.1",
+    "zustand": "5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.1",
+    "vite": "8.1.5"
+  }
+}
