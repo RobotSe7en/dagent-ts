@@ -50,9 +50,10 @@ preview。只有带 `valueReference` provenance 的值才会被恢复，普通�
 
 ## 检查点与 Host 持久化
 
-审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹、执行限制和
-`contextUsage`。Host 对 checkpoint 使用一次性原子 claim，并在整体替换会话时使用
-revision compare-and-swap。重复审核、定义变化或过期会话 revision 都会在执行前被拒绝。
+V4 审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹、执行限制、运行目录、
+初始附加系统提示和 `contextUsage`。Host 对 checkpoint 使用一次性原子 claim，并在整体
+替换会话时使用 revision compare-and-swap。重复审核、定义变化或过期会话 revision
+都会在执行前被拒绝。
 
 数据库迁移不会在运行时猜测 V1/V2 结构：没有合法且 identity 匹配的 V3 文档会被标记为
 `legacy`，详情与继续运行接口返回 HTTP 409。

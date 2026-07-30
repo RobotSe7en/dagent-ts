@@ -50,6 +50,7 @@ describe('RunService', () => {
     const runner = new Runner({
       provider,
       workspace: join(directory, 'runs'),
+      runtimeDirectory: '.runtime',
     });
     const service = new RunService(runner, repository);
     const agent = defineToolAgent({
@@ -149,6 +150,7 @@ describe('RunService', () => {
       provider,
       capabilities: [risky],
       workspace: join(directory, 'runs'),
+      runtimeDirectory: '.runtime',
     });
     const service = new RunService(runner, repository);
     const agent = defineToolAgent({
@@ -219,6 +221,7 @@ describe('RunService', () => {
       provider,
       capabilities: [risky],
       workspace: join(directory, 'runs'),
+      runtimeDirectory: '.runtime',
     });
     const service = new RunService(runner, repository);
     const agent = defineToolAgent({

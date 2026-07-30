@@ -6,6 +6,11 @@ import { defineToolAgent } from './contracts/agents.js';
 import type { ChatResponse } from './contracts/messages.js';
 import { createAgentProfile } from './profiles/profile.js';
 import { Runner } from './runner.js';
+
+const runnerPaths = {
+  workspace: '/tmp/dagent-ts-validation-tests',
+  runtimeDirectory: '.runtime',
+} as const;
 import { MockProvider } from './testing/mock-provider.js';
 
 describe('Runner result validation', () => {
@@ -30,6 +35,7 @@ describe('Runner result validation', () => {
       reply('{"passed":true,"issues":[],"summary":"Complete."}'),
     ]);
     const runner = new Runner({
+      ...runnerPaths,
       provider,
       capabilities: [echo],
       validation: {
@@ -94,6 +100,7 @@ describe('Runner result validation', () => {
       reply('{"passed":false,"issues":[{"message":"Incomplete."}],"summary":"Retry."}'),
     ]);
     const runner = new Runner({
+      ...runnerPaths,
       provider,
       capabilities: [inspect],
       validation: {
@@ -125,6 +132,7 @@ describe('Runner result validation', () => {
   it('does not validate direct answers that have no execution context', async () => {
     const provider = new MockProvider([reply('direct answer')]);
     const runner = new Runner({
+      ...runnerPaths,
       provider,
       validation: {
         enabled: true,

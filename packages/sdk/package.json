@@ -1,6 +1,6 @@
 {
   "name": "dagent-ai",
-  "version": "0.8.0",
+  "version": "0.8.3",
   "description": "Type-safe, human-reviewed agent DAG runtime for TypeScript",
   "type": "module",
   "license": "Apache-2.0",

@@ -125,6 +125,28 @@ describe('PromptBuilder', () => {
       }),
     ).toBe(`${inserted} / {{ 7 * 6 }} / {{ missing }}`);
   });
+
+  it('places a literal extra system prompt after runtime context and before dynamic sections', () => {
+    const profile = createAgentProfile({
+      name: 'analyst',
+      content: '# Analyst\n\nBe precise.',
+    });
+    const message = new PromptBuilder().buildSystemMessage({
+      profile,
+      task: '',
+      workspacePath: './workspace',
+      extraSystemPrompt: 'Keep {{literal}} exactly.',
+      context: 'Dynamic context.',
+    });
+
+    expect(message.content.indexOf('## Runtime Context')).toBeLessThan(
+      message.content.indexOf('## Extra System Prompt'),
+    );
+    expect(message.content.indexOf('Keep {{literal}} exactly.')).toBeLessThan(
+      message.content.indexOf('## Context'),
+    );
+    expect(message.content).toContain('Keep {{literal}} exactly.');
+  });
 });
 
 describe('ProfiledAgent', () => {

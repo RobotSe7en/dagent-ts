@@ -18,11 +18,13 @@ export type RuntimeExecutionContext = {
   readonly budget: ExecutionBudget;
   readonly events: RunEventEmitter;
   readonly workspacePath: string;
+  readonly runtimeDirectory: string;
   readonly signal: AbortSignal;
   readonly contextPolicy: ContextPolicy;
   readonly resultStoragePolicy: ResultStoragePolicy;
   readonly contextWindowTokens: number;
   readonly outputReserveTokens: number;
+  readonly extraSystemPrompt?: string;
 };
 
 export type AgentLoopResult =

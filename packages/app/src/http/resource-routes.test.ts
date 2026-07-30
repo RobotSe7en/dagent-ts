@@ -212,6 +212,7 @@ describe('run resources', () => {
     for (const response of [eventLog, runDetail, trace, conversationDetail]) {
       expect(response.body).not.toContain('Private chain.');
       expect(response.body).not.toContain('SYSTEM_PROMPT_SECRET');
+      expect(response.body).not.toContain('EXTRA_SYSTEM_PROMPT_SECRET');
       expect(response.body).not.toContain('modelThread');
     }
     expect(trace.json()).toMatchObject({
@@ -237,7 +238,10 @@ async function testApplication(provider = new MockProvider([])) {
   const directory = await mkdtemp(join(tmpdir(), 'dagent-resources-'));
   temporaryDirectories.push(directory);
   const application = await createApplication({
-    config: appConfigSchema.parse({ dataDirectory: join(directory, 'data') }),
+    config: appConfigSchema.parse({
+      dataDirectory: join(directory, 'data'),
+      extraSystemPrompt: 'EXTRA_SYSTEM_PROMPT_SECRET',
+    }),
     provider,
     logger: false,
   });

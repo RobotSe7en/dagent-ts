@@ -245,6 +245,7 @@ export class DagExecutor {
           );
           const normalized = await normalizeCapabilityResult(invoked.result, {
             workspacePath: context.workspacePath,
+            runtimeDirectory: context.runtimeDirectory,
             policy: context.resultStoragePolicy,
           });
           await context.events.emit({
@@ -336,6 +337,7 @@ export class DagExecutor {
       if (persistedOutput === undefined) {
         const stored = await externalizeJsonValue(output, {
           workspacePath: context.workspacePath,
+          runtimeDirectory: context.runtimeDirectory,
           key: `node-${node.id}-${createInvocationId()}`,
           policy: context.resultStoragePolicy,
         });

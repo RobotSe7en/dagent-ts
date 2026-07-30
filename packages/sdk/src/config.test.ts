@@ -18,7 +18,6 @@ afterEach(async () => {
 describe('runner configuration', () => {
   it('applies complete defaults and rejects unknown keys', () => {
     expect(runnerConfigSchema.parse({})).toMatchObject({
-      workspace: '.dagent-ts',
       builtins: ['files', 'shell', 'memory'],
       sandbox: { enabled: false },
       validation: { enabled: false, maxRetries: 1 },
@@ -35,13 +34,12 @@ describe('runner configuration', () => {
     ).toThrow(/outputReserveTokens/u);
   });
 
-  it('resolves workspace, skills, and agent configuration relative to the file', async () => {
+  it('uses explicit runtime locations and resolves file-owned configuration relative to the file', async () => {
     const directory = await temporaryDirectory();
     const path = join(directory, 'dagent.yaml');
     await writeFile(
       path,
       [
-        'workspace: ./runtime',
         'builtins: [memory]',
         'skills:',
         '  roots: [./shared-skills]',
@@ -59,6 +57,8 @@ describe('runner configuration', () => {
 
     const runner = await createRunnerFromConfigFile(path, {
       provider: new MockProvider([]),
+      workspace: join(directory, 'runtime'),
+      runtimeDirectory: '.runtime',
     });
 
     expect(runner.workspacePath).toBe(resolve(directory, 'runtime'));
@@ -98,6 +98,8 @@ describe('runner configuration', () => {
 
     const runner = await createRunnerFromConfigFile(path, {
       provider: new MockProvider([]),
+      workspace: join(directory, 'runtime'),
+      runtimeDirectory: '.runtime',
     });
 
     expect(runner.validationPolicy).toMatchObject({
@@ -120,7 +122,11 @@ describe('runner configuration', () => {
     );
 
     await expect(
-      createRunnerFromConfigFile(path, { provider: new MockProvider([]) }),
+      createRunnerFromConfigFile(path, {
+        provider: new MockProvider([]),
+        workspace: join(directory, 'runtime'),
+        runtimeDirectory: '.runtime',
+      }),
     ).rejects.toThrow(/does not exist/u);
   });
 });

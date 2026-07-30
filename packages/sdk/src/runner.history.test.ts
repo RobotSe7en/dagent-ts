@@ -5,6 +5,11 @@ import { tool } from './capabilities/tool.js';
 import { defineDagAgent, defineToolAgent } from './contracts/agents.js';
 import { conversationStateSchema } from './contracts/conversation.js';
 import { Runner } from './runner.js';
+
+const runnerPaths = {
+  workspace: '/tmp/dagent-ts-history-tests',
+  runtimeDirectory: '.runtime',
+} as const;
 import { MockProvider } from './testing/mock-provider.js';
 
 describe('Runner conversation history', () => {
@@ -17,7 +22,7 @@ describe('Runner conversation history', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider });
+    const runner = new Runner({ ...runnerPaths, provider });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'attachment-reader',
@@ -68,7 +73,7 @@ describe('Runner conversation history', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider });
+    const runner = new Runner({ ...runnerPaths, provider });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'assistant',
@@ -149,6 +154,7 @@ describe('Runner conversation history', () => {
     };
     const provider = new MockProvider([reply, reply]);
     const runner = new Runner({
+      ...runnerPaths,
       provider,
       capabilities: [
         tool({

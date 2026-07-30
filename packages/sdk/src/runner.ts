@@ -15,10 +15,13 @@ import {
   createReviewId,
   dagNodeResultSchema,
   executionLimitsSchema,
+  extraSystemPromptSchema,
   nowTimestamp,
   pendingReviewSchema,
+  resolvedRunPlanPayloadSchema,
   resolvedRunPlanSchema,
   resultStoragePolicySchema,
+  runtimeDirectorySchema,
   reviewDecisionSchema,
   runCheckpointSchema,
   runStateSchema,
@@ -80,7 +83,9 @@ export type RunnerOptions = {
   readonly provider: ChatProvider;
   readonly capabilities?: readonly CapabilityBinding[];
   readonly agents?: readonly (ToolAgent | DagAgent | AutoAgent)[];
-  readonly workspace?: string;
+  readonly workspace: string;
+  readonly runtimeDirectory: string;
+  readonly extraSystemPrompt?: string;
   readonly limits?: Partial<ExecutionLimits>;
   readonly context?: Partial<ContextPolicy>;
   readonly resultStorage?: Partial<ResultStoragePolicy>;
@@ -125,6 +130,8 @@ export class Runner implements AsyncDisposable {
   readonly #provider: ChatProvider;
   readonly #agents = new Map<string, ToolAgent | DagAgent | AutoAgent>();
   readonly #workspace: string;
+  readonly #runtimeDirectory: string;
+  #extraSystemPrompt: string | undefined;
   readonly #conversationResources: ConversationResourceStore;
   readonly #limits: ExecutionLimits;
   readonly #context: ContextPolicy;
@@ -146,8 +153,16 @@ export class Runner implements AsyncDisposable {
     this.mcp = new McpManager();
     this.catalog = new CapabilityCatalog(createSkillCapabilities(this.skills));
     for (const binding of options.capabilities ?? []) this.catalog.replace(binding);
-    this.#workspace = resolve(options.workspace ?? '.dagent-ts');
-    this.#conversationResources = new ConversationResourceStore(this.#workspace);
+    this.#workspace = resolve(options.workspace);
+    this.#runtimeDirectory = runtimeDirectorySchema.parse(options.runtimeDirectory);
+    this.#extraSystemPrompt =
+      options.extraSystemPrompt === undefined
+        ? undefined
+        : extraSystemPromptSchema.parse(options.extraSystemPrompt);
+    this.#conversationResources = new ConversationResourceStore(
+      this.#workspace,
+      this.#runtimeDirectory,
+    );
     this.#limits = executionLimitsSchema.parse(options.limits ?? {});
     this.#context = contextPolicySchema.parse(options.context ?? {});
     this.#resultStorage = resultStoragePolicySchema.parse(options.resultStorage ?? {});
@@ -159,6 +174,20 @@ export class Runner implements AsyncDisposable {
 
   public get workspacePath(): string {
     return this.#workspace;
+  }
+
+  public get runtimeDirectory(): string {
+    return this.#runtimeDirectory;
+  }
+
+  public get extraSystemPrompt(): string | undefined {
+    return this.#extraSystemPrompt;
+  }
+
+  public set extraSystemPrompt(value: string | undefined) {
+    this.#assertOpen();
+    this.#extraSystemPrompt =
+      value === undefined ? undefined : extraSystemPromptSchema.parse(value);
   }
 
   public get validationPolicy(): ValidationPolicy {
@@ -395,14 +424,30 @@ export class Runner implements AsyncDisposable {
       const graph = assertValidDag(
         decision.replacementGraph ?? review.proposedGraph ?? checkpoint.state.graph,
       );
-      return this.#executeApprovedGraph(
-        checkpoint.state,
-        checkpoint.plan,
-        budget,
-        emitter,
-        context,
-        graph,
-      );
+      try {
+        return await this.#executeApprovedGraph(
+          checkpoint.state,
+          checkpoint.plan,
+          budget,
+          emitter,
+          context,
+          graph,
+        );
+      } catch (error) {
+        const dynamicAgent = dynamicAgentForTarget(target);
+        if (dynamicAgent === undefined || context.signal.aborted) throw error;
+        return this.#replanAfterReviewedFailure(
+          dynamicAgent,
+          lastUserRequest(
+            checkpoint.state.conversation ?? conversationStateSchema.parse({ schemaVersion: 3 }),
+          ),
+          graph,
+          error,
+          checkpoint.state,
+          checkpoint.plan,
+          context,
+        );
+      }
     } catch (error) {
       return this.#failedOutcome(checkpoint.state, checkpoint.plan, budget, emitter, error);
     } finally {
@@ -457,10 +502,12 @@ export class Runner implements AsyncDisposable {
       limits,
       this.#contextForTarget(target),
       this.#resultStorage,
+      this.#runtimeDirectory,
       this.#contextWindowTokens ??
         readProviderNumber(this.#provider, 'contextWindowTokens', 32_768),
       this.#outputReserveTokens ?? readProviderNumber(this.#provider, 'outputReserveTokens', 4096),
       this.#validation,
+      this.#extraSystemPrompt,
     );
     const timestamp = nowTimestamp();
     const initialState = runStateSchema.parse({
@@ -711,6 +758,85 @@ export class Runner implements AsyncDisposable {
     return this.#finalize(completed, plan, budget, emitter);
   }
 
+  async #replanAfterReviewedFailure(
+    agent: DagAgent,
+    prompt: string,
+    failedGraph: DAGSpec,
+    initialError: unknown,
+    reviewState: RunState,
+    plan: ResolvedRunPlan,
+    context: RuntimeExecutionContext,
+  ): Promise<RunOutcome> {
+    const planner = new DynamicPlanner();
+    const priorConversationRevision = reviewState.conversation?.revision ?? 0;
+    let graph = failedGraph;
+    let error = initialError;
+    let state = partialRunState(initialError, reviewState.runId) ?? reviewState;
+    let completedResults = completedNodeResults(initialError);
+    const usedReplans = Math.max(
+      0,
+      plannerTurnCount(reviewState.conversation, reviewState.runId) - 1,
+    );
+
+    for (let attempt = usedReplans; attempt < agent.maxReplans; attempt += 1) {
+      const planned = await planner.plan(
+        agent,
+        {
+          prompt,
+          ...(state.conversation === undefined ? {} : { conversation: state.conversation }),
+          previousGraph: graph,
+          failure: errorMessage(error),
+          completedNodeIds: Object.keys(completedResults),
+        },
+        context,
+      );
+      let conversation = planned.conversation;
+      if (conversation.revision <= priorConversationRevision) {
+        conversation = conversationStateSchema.parse({
+          ...conversation,
+          revision: priorConversationRevision + 1,
+        });
+      }
+      const plannedState = runStateSchema.parse({
+        ...state,
+        status: 'planning',
+        conversation,
+        contextUsage: [...state.contextUsage, ...planned.contextUsage],
+        graph: planned.proposal.graph,
+        nodeResults: completedResults,
+        error: undefined,
+        pendingReview: undefined,
+        revision: state.revision + 1,
+        updatedAt: nowTimestamp(),
+      });
+      if (requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog)) {
+        return this.#awaitDagReview(
+          plannedState,
+          plan,
+          context,
+          planned.proposal.graph,
+          planned.proposal.rationale || 'Review proposed DAG revision from replanning.',
+        );
+      }
+      try {
+        return await this.#executeApprovedGraph(
+          plannedState,
+          plan,
+          context.budget,
+          context.events,
+          context,
+          planned.proposal.graph,
+        );
+      } catch (nextError) {
+        graph = planned.proposal.graph;
+        error = nextError;
+        state = partialRunState(nextError, reviewState.runId) ?? plannedState;
+        completedResults = completedNodeResults(nextError);
+      }
+    }
+    throw error;
+  }
+
   async #awaitDagReview(
     state: RunState,
     plan: ResolvedRunPlan,
@@ -875,7 +1001,7 @@ export class Runner implements AsyncDisposable {
       await this.#conversationResources.persist(state.conversation, state.workspacePath);
     }
     const checkpoint = runCheckpointSchema.parse({
-      schemaVersion: 3,
+      schemaVersion: 4,
       state,
       plan,
       usage: budget.snapshot(),
@@ -974,11 +1100,15 @@ export class Runner implements AsyncDisposable {
       budget,
       events,
       workspacePath,
+      runtimeDirectory: plan.runtimeDirectory,
       signal,
       contextPolicy: plan.contextPolicy,
       resultStoragePolicy: plan.resultStoragePolicy,
       contextWindowTokens: plan.contextWindowTokens,
       outputReserveTokens: plan.outputReserveTokens,
+      ...(plan.extraSystemPrompt === undefined
+        ? {}
+        : { extraSystemPrompt: plan.extraSystemPrompt }),
     };
   }
 
@@ -1087,17 +1217,19 @@ function createResolvedPlan(
   limits: ExecutionLimits,
   contextPolicy: ContextPolicy,
   resultStoragePolicy: ResultStoragePolicy,
+  runtimeDirectory: string,
   contextWindowTokens: number,
   outputReserveTokens: number,
   validation: ValidationPolicy,
+  extraSystemPrompt: string | undefined,
 ): ResolvedRunPlan {
   const capabilityIds = targetCapabilityIds(target);
   const skillIds = target.kind === 'static-dag' ? [] : target.scope.skills;
   const capabilityFingerprints = Object.fromEntries(
     capabilityIds.map((id) => [id, capabilityFingerprint(catalog.require(id).definition)]),
   );
-  const payload = {
-    schemaVersion: 3 as const,
+  const payload = resolvedRunPlanPayloadSchema.parse({
+    schemaVersion: 4 as const,
     target,
     capabilityIds,
     capabilityFingerprints,
@@ -1105,10 +1237,12 @@ function createResolvedPlan(
     limits,
     contextPolicy,
     resultStoragePolicy,
+    runtimeDirectory,
     contextWindowTokens,
     outputReserveTokens,
     validation,
-  };
+    ...(extraSystemPrompt === undefined ? {} : { extraSystemPrompt }),
+  });
   return resolvedRunPlanSchema.parse({
     ...payload,
     fingerprint: sha256(JSON.parse(JSON.stringify(payload)) as JsonValue),
@@ -1170,6 +1304,20 @@ function targetCapabilityIds(target: RunTarget): string[] {
     ];
   }
   return [...target.scope.capabilities];
+}
+
+function dynamicAgentForTarget(target: RunTarget): DagAgent | undefined {
+  if (target.kind === 'dag-agent') return target;
+  if (target.kind === 'auto-agent') return target.dagAgent;
+  return undefined;
+}
+
+function plannerTurnCount(conversation: ConversationState | undefined, runId: RunId): number {
+  return (
+    conversation?.items.filter(
+      (item) => item.type === 'assistant' && item.scope === 'planner' && item.runId === runId,
+    ).length ?? 0
+  );
 }
 
 function isAgentInput(input: RunInput): input is AgentRunInput;

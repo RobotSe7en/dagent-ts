@@ -11,6 +11,11 @@ import { defineStaticDag } from './contracts/agents.js';
 import type { DAGSpec, DagNode, JsonObject, RunOutcome, ValueBinding } from './contracts/index.js';
 import { validateDag } from './domain/dag-validation.js';
 import { Runner } from './runner.js';
+
+const runnerPaths = {
+  workspace: '/tmp/dagent-ts-dag-tests',
+  runtimeDirectory: '.runtime',
+} as const;
 import { MockProvider } from './testing/mock-provider.js';
 
 const temporaryDirectories: string[] = [];
@@ -80,6 +85,7 @@ describe('static DAG control flow', () => {
     };
     const directory = await temporaryDirectory();
     const runner = new Runner({
+      ...runnerPaths,
       provider: new MockProvider([]),
       capabilities: [produce, consume],
       workspace: directory,
@@ -157,6 +163,7 @@ describe('static DAG control flow', () => {
     };
     const directory = await temporaryDirectory();
     const runner = new Runner({
+      ...runnerPaths,
       provider: new MockProvider([]),
       capabilities: [produce, consume],
       workspace: directory,
@@ -436,6 +443,7 @@ describe('static DAG control flow', () => {
 
     const directory = await temporaryDirectory();
     const runner = new Runner({
+      ...runnerPaths,
       provider: new MockProvider([]),
       capabilities: [deploy],
       workspace: directory,
@@ -581,6 +589,7 @@ async function runStatic(
 ): Promise<RunOutcome> {
   const directory = await temporaryDirectory();
   const runner = new Runner({
+    ...runnerPaths,
     provider: new MockProvider([]),
     capabilities,
     workspace: directory,

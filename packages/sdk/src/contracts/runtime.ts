@@ -1,10 +1,14 @@
 import { z } from 'zod';
 
+import { sha256 } from '../internal/stable-json.js';
 import {
+  checkpointSchemaVersionSchema,
+  extraSystemPromptSchema,
   jsonObjectSchema,
   jsonValueSchema,
   reviewIdSchema,
   runIdSchema,
+  runtimeDirectorySchema,
   runtimeSchemaVersionSchema,
   timestampSchema,
 } from './common.js';
@@ -90,54 +94,76 @@ export const runStateSchema = z
   .strict();
 export type RunState = z.infer<typeof runStateSchema>;
 
+const resolvedRunPlanPayloadShape = {
+  schemaVersion: checkpointSchemaVersionSchema.default(4),
+  target: z.record(z.string(), z.unknown()),
+  capabilityIds: z.array(z.string()),
+  capabilityFingerprints: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
+  skillIds: z.array(z.string()),
+  limits: executionLimitsSchema,
+  contextPolicy: contextPolicySchema.prefault({}),
+  resultStoragePolicy: resultStoragePolicySchema.prefault({}),
+  runtimeDirectory: runtimeDirectorySchema,
+  contextWindowTokens: z.number().int().min(1024).default(32_768),
+  outputReserveTokens: z.number().int().nonnegative().default(4096),
+  extraSystemPrompt: extraSystemPromptSchema.optional(),
+  validation: validationPolicySchema.prefault({}),
+} as const;
+
+export const resolvedRunPlanPayloadSchema = z.object(resolvedRunPlanPayloadShape).strict();
+
 export const resolvedRunPlanSchema = z
   .object({
-    schemaVersion: runtimeSchemaVersionSchema.default(3),
-    target: z.record(z.string(), z.unknown()),
-    capabilityIds: z.array(z.string()),
-    capabilityFingerprints: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
-    skillIds: z.array(z.string()),
-    limits: executionLimitsSchema,
-    contextPolicy: contextPolicySchema.prefault({}),
-    resultStoragePolicy: resultStoragePolicySchema.prefault({}),
-    contextWindowTokens: z.number().int().min(1024).default(32_768),
-    outputReserveTokens: z.number().int().nonnegative().default(4096),
-    validation: validationPolicySchema.prefault({}),
+    ...resolvedRunPlanPayloadShape,
     fingerprint: z.string().min(1),
   })
   .strict()
-  .superRefine(
-    (
-      { capabilityIds, capabilityFingerprints, contextWindowTokens, outputReserveTokens },
-      context,
-    ) => {
-      if (outputReserveTokens >= contextWindowTokens) {
-        context.addIssue({
-          code: 'custom',
-          message: 'outputReserveTokens must be smaller than contextWindowTokens.',
-          path: ['outputReserveTokens'],
-        });
-      }
-      const ids = [...new Set(capabilityIds)].sort();
-      const fingerprintIds = Object.keys(capabilityFingerprints).sort();
-      if (
-        ids.length !== capabilityIds.length ||
-        ids.length !== fingerprintIds.length ||
-        ids.some((id, index) => id !== fingerprintIds[index])
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: 'capabilityFingerprints must exactly match unique capabilityIds.',
-          path: ['capabilityFingerprints'],
-        });
-      }
-    },
-  );
+  .superRefine((plan, context) => {
+    const {
+      capabilityIds,
+      capabilityFingerprints,
+      contextWindowTokens,
+      outputReserveTokens,
+      fingerprint,
+    } = plan;
+    const payload: Record<string, unknown> = { ...plan };
+    delete payload['fingerprint'];
+    if (outputReserveTokens >= contextWindowTokens) {
+      context.addIssue({
+        code: 'custom',
+        message: 'outputReserveTokens must be smaller than contextWindowTokens.',
+        path: ['outputReserveTokens'],
+      });
+    }
+    const ids = [...new Set(capabilityIds)].sort();
+    const fingerprintIds = Object.keys(capabilityFingerprints).sort();
+    if (
+      ids.length !== capabilityIds.length ||
+      ids.length !== fingerprintIds.length ||
+      ids.some((id, index) => id !== fingerprintIds[index])
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'capabilityFingerprints must exactly match unique capabilityIds.',
+        path: ['capabilityFingerprints'],
+      });
+    }
+    const expectedFingerprint = sha256(
+      JSON.parse(JSON.stringify(payload)) as z.infer<typeof jsonValueSchema>,
+    );
+    if (fingerprint !== expectedFingerprint) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Resolved run plan fingerprint does not match its payload.',
+        path: ['fingerprint'],
+      });
+    }
+  });
 export type ResolvedRunPlan = z.infer<typeof resolvedRunPlanSchema>;
 
 export const runCheckpointSchema = z
   .object({
-    schemaVersion: runtimeSchemaVersionSchema.default(3),
+    schemaVersion: checkpointSchemaVersionSchema.default(4),
     state: runStateSchema,
     plan: resolvedRunPlanSchema,
     usage: executionUsageSchema,

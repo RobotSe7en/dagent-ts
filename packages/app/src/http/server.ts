@@ -90,6 +90,10 @@ export async function createApplication(options: {
   const runner = new Runner({
     provider,
     workspace: join(resolve(options.config.dataDirectory), 'workspace'),
+    runtimeDirectory: options.config.runtimeDirectory,
+    ...(options.config.extraSystemPrompt === undefined
+      ? {}
+      : { extraSystemPrompt: options.config.extraSystemPrompt }),
     capabilities: [
       ...createFileTools(),
       createShellTool(dockerSandbox === undefined ? {} : { executor: dockerSandbox }),

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { extname, posix } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
+import { extname, join, posix } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { Workspace } from '../capabilities/workspace.js';
 import type {
@@ -17,8 +18,6 @@ import {
 } from '../contracts/index.js';
 import { DagentError } from '../errors.js';
 
-const OBJECT_ROOT = '.dagent/conversations';
-const HISTORY_ROOT = '.dagent/history';
 const UPLOAD_ROOT = 'uploads';
 
 type ResourceRecord = {
@@ -29,12 +28,19 @@ type ResourceRecord = {
 };
 
 export class ConversationResourceStore {
-  public constructor(private readonly workspaceRoot: string) {}
+  public constructor(
+    private readonly workspaceRoot: string,
+    private readonly runtimeDirectory: string,
+  ) {}
 
   public async persist(conversation: ConversationState, workspacePath: string): Promise<void> {
+    const records = conversationResources(conversation);
+    if (records.length === 0) return;
     const source = await Workspace.open(workspacePath);
-    const store = await Workspace.open(this.workspaceRoot);
-    for (const record of conversationResources(conversation)) {
+    const store = await Workspace.open(
+      join(this.workspaceRoot, this.runtimeDirectory, 'conversations'),
+    );
+    for (const record of records) {
       const data = await verifiedRead(source, record);
       const target = objectPath(conversation.id, record.sha256);
       const existing = await readWorkspaceFile(store, target);
@@ -42,7 +48,12 @@ export class ConversationResourceStore {
         verifyBytes(existing, record);
         continue;
       }
-      await store.writeFile(target, data, { overwrite: false });
+      await store.writeFile(target, data, { overwrite: false }).catch(async (error: unknown) => {
+        if (!isAlreadyExistsError(error)) throw error;
+        const concurrent = await readWorkspaceFile(store, target);
+        if (concurrent === undefined) throw error;
+        verifyBytes(concurrent, record);
+      });
     }
   }
 
@@ -51,14 +62,44 @@ export class ConversationResourceStore {
     workspacePath: string,
   ): Promise<ConversationState> {
     if (conversationResources(conversation).length === 0) return conversation;
-    const store = await Workspace.open(this.workspaceRoot);
     const destination = await Workspace.open(workspacePath);
+    let store: Workspace | undefined;
+    const openStore = async () => {
+      if (store !== undefined) return store;
+      const root = join(this.workspaceRoot, this.runtimeDirectory, 'conversations');
+      const exists = await access(root).then(
+        () => true,
+        (error: unknown) => {
+          if (isMissingPathError(error)) return false;
+          throw error;
+        },
+      );
+      if (!exists) return undefined;
+      store = await Workspace.open(root);
+      return store;
+    };
     const materialized = new Map<string, string>();
 
     const rebase = async (record: ResourceRecord): Promise<string> => {
       const existing = materialized.get(record.sha256);
       if (existing !== undefined) return existing;
-      const data = await readWorkspaceFile(store, objectPath(conversation.id, record.sha256));
+      const current = await readWorkspaceFile(destination, record.path);
+      if (current !== undefined) {
+        verifyBytes(current, record);
+        materialized.set(record.sha256, record.path);
+        return record.path;
+      }
+      const backingStore = await openStore();
+      if (backingStore === undefined) {
+        throw new DagentError(
+          'WORKSPACE_VIOLATION',
+          `Conversation resource is unavailable: ${record.path} (sha256=${record.sha256}).`,
+        );
+      }
+      const data = await readWorkspaceFile(
+        backingStore,
+        objectPath(conversation.id, record.sha256),
+      );
       if (data === undefined) {
         throw new DagentError(
           'WORKSPACE_VIOLATION',
@@ -66,12 +107,12 @@ export class ConversationResourceStore {
         );
       }
       verifyBytes(data, record);
-      const path = `${HISTORY_ROOT}/${record.sha256}${safeMediaSuffix(record.mediaType)}`;
-      const current = await readWorkspaceFile(destination, path);
-      if (current === undefined) {
+      const path = `${this.runtimeDirectory}/history/${record.sha256}${safeMediaSuffix(record.mediaType)}`;
+      const restored = await readWorkspaceFile(destination, path);
+      if (restored === undefined) {
         await destination.writeFile(path, data, { overwrite: false });
       } else {
-        verifyBytes(current, record);
+        verifyBytes(restored, record);
       }
       materialized.set(record.sha256, path);
       return path;
@@ -118,6 +159,7 @@ export class ConversationResourceStore {
       }
       items.push(item);
     }
+    if (isDeepStrictEqual(items, conversation.items)) return conversation;
     return conversationStateSchema.parse({
       ...conversation,
       revision: conversation.revision + 1,
@@ -210,6 +252,18 @@ async function readWorkspaceFile(
   return resolved === undefined ? undefined : readFile(resolved);
 }
 
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return (
+    error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EEXIST'
+  );
+}
+
 function verifyBytes(data: Uint8Array, record: ResourceRecord): void {
   if (data.byteLength !== record.byteLength) {
     throw new DagentError(
@@ -227,7 +281,7 @@ function verifyBytes(data: Uint8Array, record: ResourceRecord): void {
 
 function objectPath(conversationId: string, sha256: string): string {
   const conversationKey = createHash('sha256').update(conversationId).digest('hex');
-  return `${OBJECT_ROOT}/${conversationKey}/${sha256.slice(0, 2)}/${sha256}`;
+  return `${conversationKey}/${sha256.slice(0, 2)}/${sha256}`;
 }
 
 function safeUploadPath(filename: string): string {

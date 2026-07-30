@@ -87,8 +87,10 @@ function publicState(state: NonNullable<StoredRun['checkpoint']>['state']) {
 }
 
 function publicPlan(plan: NonNullable<StoredRun['checkpoint']>['plan']) {
+  const visible = { ...plan };
+  delete visible.extraSystemPrompt;
   return {
-    ...plan,
+    ...visible,
     target: publicTarget(plan.target),
     validation: {
       enabled: plan.validation.enabled,

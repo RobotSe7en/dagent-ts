@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   contextPolicySchema,
+  contentReferenceSchema,
   conversationStateSchema,
   inlineContent,
   toolResultMessageSchema,
@@ -100,5 +101,60 @@ describe('ContextAssembler', () => {
     });
     expect(prepared.usage.compactionMethod).toBe('deterministic-fallback');
     expect(prepared.conversation.summary?.fallbackReason).toContain('offline');
+  });
+
+  it('projects every distinct stored result reference with bounded provenance', async () => {
+    const first = contentReferenceSchema.parse({
+      type: 'dagent_content_reference',
+      path: '.runtime/results/first.json',
+      mediaType: 'application/json',
+      byteLength: 120,
+      sha256: 'a'.repeat(64),
+      preview: '{"preview":true}',
+    });
+    const second = contentReferenceSchema.parse({
+      type: 'dagent_content_reference',
+      path: '.runtime/results/second.bin',
+      mediaType: 'application/octet-stream',
+      byteLength: 512,
+      sha256: 'b'.repeat(64),
+      preview: '',
+    });
+    const conversation = conversationStateSchema.parse({
+      schemaVersion: 3,
+      items: [
+        toolResultMessageSchema.parse({
+          type: 'tool-result',
+          callId: 'call-references',
+          name: 'tool.references',
+          status: 'completed',
+          content: first,
+          valueReference: first,
+          artifacts: [first, second],
+        }),
+      ],
+    });
+    const assembler = new ContextAssembler({
+      contextWindowTokens: 4096,
+      outputReserveTokens: 128,
+      tokenCounter: characterCounter,
+    });
+
+    const prepared = await assembler.prepare({
+      systemMessage: { role: 'system', content: 'system' },
+      conversation,
+      policy: contextPolicySchema.parse({
+        maxToolResultTokens: 2048,
+        maxTotalToolResultTokens: 2048,
+        tokenSafetyMargin: 0,
+      }),
+    });
+
+    const projected = prepared.messages.find(({ role }) => role === 'tool')?.content ?? '';
+    expect(projected.match(/path=\.runtime\/results\/first\.json/gu)).toHaveLength(1);
+    expect(projected.match(/path=\.runtime\/results\/second\.bin/gu)).toHaveLength(1);
+    expect(projected).toContain('media_type=application/octet-stream');
+    expect(projected).toContain('bytes=512');
+    expect(prepared.usage.toolResultTokens).toBe(projected.length);
   });
 });

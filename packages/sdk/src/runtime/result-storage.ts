@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { extname, posix, resolve } from 'node:path';
 
 import type {
@@ -31,20 +31,29 @@ export async function normalizeCapabilityResult(
   result: CapabilityResult,
   options: {
     readonly workspacePath: string;
+    readonly runtimeDirectory: string;
     readonly policy?: ResultStoragePolicy;
   },
 ): Promise<NormalizedCapabilityResult> {
   const policy = resultStoragePolicySchema.parse(options.policy ?? {});
-  const workspace = await Workspace.open(options.workspacePath);
-  const resultRoot = workspace.resolve(policy.internalDirectory);
-  await mkdir(resultRoot, { recursive: true });
   const references: ContentReference[] = [...result.artifacts];
+  let storage:
+    | {
+        readonly workspace: Workspace;
+        readonly resultRoot: string;
+      }
+    | undefined;
+  const openStorage = async () => {
+    storage ??= await openResultStorage(options.workspacePath, options.runtimeDirectory);
+    return storage;
+  };
 
   const effectiveContent = capabilityResultContent(result);
   const contentBytes = Buffer.from(effectiveContent, 'utf8');
   let storedContent: StoredContent = inlineContent(effectiveContent);
   let normalizedContent = effectiveContent;
   if (contentBytes.byteLength > policy.maxInlineBytes) {
+    const { workspace, resultRoot } = await openStorage();
     const reference = await writeReference({
       root: resultRoot,
       workspace,
@@ -63,6 +72,7 @@ export async function normalizeCapabilityResult(
   if (normalizedOutput !== undefined) {
     const encoded = Buffer.from(JSON.stringify(normalizedOutput), 'utf8');
     if (encoded.byteLength > policy.maxInlineBytes) {
+      const { workspace, resultRoot } = await openStorage();
       const reference = await writeReference({
         root: resultRoot,
         workspace,
@@ -116,6 +126,7 @@ export async function externalizeJsonValue(
   value: JsonValue,
   options: {
     readonly workspacePath: string;
+    readonly runtimeDirectory: string;
     readonly key: string;
     readonly policy?: ResultStoragePolicy;
   },
@@ -124,9 +135,10 @@ export async function externalizeJsonValue(
   const encoded = Buffer.from(JSON.stringify(value), 'utf8');
   if (encoded.byteLength <= policy.maxInlineBytes) return { value };
 
-  const workspace = await Workspace.open(options.workspacePath);
-  const resultRoot = workspace.resolve(policy.internalDirectory);
-  await mkdir(resultRoot, { recursive: true });
+  const { workspace, resultRoot } = await openResultStorage(
+    options.workspacePath,
+    options.runtimeDirectory,
+  );
   const reference = await writeReference({
     root: resultRoot,
     workspace,
@@ -136,6 +148,15 @@ export async function externalizeJsonValue(
     preview: headTailPreview(encoded.toString('utf8'), previewLimit(policy)),
   });
   return { value: asJsonValue(reference), reference };
+}
+
+async function openResultStorage(
+  workspacePath: string,
+  runtimeDirectory: string,
+): Promise<{ readonly workspace: Workspace; readonly resultRoot: string }> {
+  const workspace = await Workspace.open(workspacePath);
+  const resultRoot = await workspace.ensureDirectory(`${runtimeDirectory}/results`);
+  return { workspace, resultRoot };
 }
 
 export async function readReferencedJsonValue(

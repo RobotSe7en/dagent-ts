@@ -23,6 +23,7 @@ import {
 } from '../contracts/index.js';
 import { assertValidDag } from '../domain/dag-validation.js';
 import { DagentError, errorMessage } from '../errors.js';
+import { composeSystemPrompt, runtimeContextForWorkspace } from '../profiles/prompt-builder.js';
 import { ContextAssembler } from './context-assembler.js';
 import { withRetry } from './retry.js';
 import type { RuntimeExecutionContext } from './types.js';
@@ -72,7 +73,13 @@ export class DynamicPlanner {
     const definitions = context.catalog.definitions(agent.scope.capabilities);
     const systemMessage = {
       role: 'system' as const,
-      content: plannerSystemPrompt(agent, definitions, input),
+      content: plannerSystemPrompt(
+        agent,
+        definitions,
+        input,
+        context.workspacePath,
+        context.extraSystemPrompt,
+      ),
     };
     const assembler = new ContextAssembler({
       contextWindowTokens: context.contextWindowTokens,
@@ -197,6 +204,8 @@ function plannerSystemPrompt(
   agent: DagAgent,
   definitions: readonly { readonly id: string; readonly description: string }[],
   input: DynamicPlanInput,
+  workspacePath: string,
+  extraSystemPrompt: string | undefined,
 ): string {
   const capabilityLines = definitions.map(
     (definition) => `- ${definition.id}: ${definition.description}`,
@@ -209,15 +218,19 @@ function plannerSystemPrompt(
         }\nCompleted nodes that must not be changed: ${JSON.stringify(
           input.completedNodeIds ?? [],
         )}`;
-  return `${agent.systemPrompt}
-
-Create a canonical DAGSpec that solves the user's request. Use only listed capability ids.
+  return composeSystemPrompt(agent.systemPrompt, {
+    runtimeContext: runtimeContextForWorkspace(workspacePath),
+    ...(extraSystemPrompt === undefined ? {} : { extraSystemPrompt }),
+    dynamicSections: [
+      `Create a canonical DAGSpec that solves the user's request. Use only listed capability ids.
 Every node-output reference must have an explicit upstream edge. Use bounded map, subgraph,
 or loop nodes for control flow. Never output source code. Return only the structured object
 matching the supplied JSON Schema.
 
 Capabilities:
-${capabilityLines.join('\n')}${replan}`;
+${capabilityLines.join('\n')}${replan}`,
+    ],
+  });
 }
 
 function validateProposal(

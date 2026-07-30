@@ -31,7 +31,8 @@ HTTP 生命周期和静态 UI。Web 端只消费版本化 API，不接触运行�
 - `CapabilityBinding<TInput, TOutput>` 将 Zod schema、执行函数和边界元数据绑定。
 - `DAGSpec` 是唯一执行图格式。节点支持 capability、agent、subgraph、map 和
   bounded loop。
-- `RunState` 是当前状态，`RunCheckpoint` 冻结目标、能力作用域、限制和状态。
+- `RunState` 是 V3 当前状态；V4 `RunCheckpoint` 冻结目标、能力作用域、限制、
+  `runtimeDirectory`、初始 `extraSystemPrompt` 和状态。
 - `RunEvent` 是带运行 ID、序号和时间戳的判别联合。
 - `ConversationState` 是 provider-neutral 的历史记录。
 
@@ -45,6 +46,11 @@ HTTP 生命周期和静态 UI。Web 端只消费版本化 API，不接触运行�
 
 节点失败时，动态 Agent 可在 `maxReplans` 限制内重新规划。只有已完成节点会被保护并
 复用；失败节点允许替换或重跑。审核使用检查点 fingerprint，过期 revision 会被拒绝。
+审核后的执行若失败并重新规划到下一个审核边界，权威会话 revision 会严格推进。
+
+SDK 要求 host 显式传入 `workspace` 和安全相对的 `runtimeDirectory`。会话资源位于
+`<workspace>/<runtimeDirectory>/conversations`；外置结果和恢复历史分别位于每次运行
+工作区的 `<runtimeDirectory>/results` 与 `<runtimeDirectory>/history`，且按需创建。
 
 ## 安全边界
 

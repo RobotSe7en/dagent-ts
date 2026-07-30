@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,28 @@ afterEach(async () => {
 });
 
 describe('V3 result storage', () => {
+  it('does not create private storage for a small inline result', async () => {
+    const workspacePath = await temporaryDirectory();
+
+    const normalized = await normalizeCapabilityResult(
+      capabilityResultSchema.parse({
+        invocationId: invocationIdSchema.parse('call-inline'),
+        capabilityId: 'tool.produce',
+        status: 'completed',
+        output: { ok: true },
+        content: 'produced',
+      }),
+      {
+        workspacePath,
+        runtimeDirectory: '.runtime',
+        policy: { maxInlineBytes: 1_024 },
+      },
+    );
+
+    expect(normalized.valueReference).toBeUndefined();
+    await expect(access(join(workspacePath, '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('externalizes a large JSON value and restores only an explicitly trusted reference', async () => {
     const workspacePath = await temporaryDirectory();
     const original = { payload: 'z'.repeat(5_000) };
@@ -29,7 +51,8 @@ describe('V3 result storage', () => {
       }),
       {
         workspacePath,
-        policy: { maxInlineBytes: 1_024, internalDirectory: '.dagent/results' },
+        runtimeDirectory: '.runtime',
+        policy: { maxInlineBytes: 1_024 },
       },
     );
 
@@ -55,14 +78,15 @@ describe('V3 result storage', () => {
       }),
       {
         workspacePath,
-        policy: { maxInlineBytes: 1_024, internalDirectory: '.dagent/results' },
+        runtimeDirectory: '.runtime',
+        policy: { maxInlineBytes: 1_024 },
       },
     );
     const reference = normalized.valueReference;
     expect(reference).toBeDefined();
     if (reference === undefined) return;
 
-    expect(reference.path).toMatch(/^\.dagent\/results\/[A-Za-z0-9_.-]+$/u);
+    expect(reference.path).toMatch(/^\.runtime\/results\/[A-Za-z0-9_.-]+$/u);
     expect(reference.path).not.toContain('..');
     await writeFile(join(workspacePath, reference.path), '{"tampered":true}');
 

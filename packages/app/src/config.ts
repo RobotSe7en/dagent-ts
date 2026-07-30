@@ -4,7 +4,11 @@ import { dirname, join, resolve } from 'node:path';
 
 import type { McpServerConfig } from 'dagent-ai';
 import { dockerSandboxConfigSchema, mcpServerConfigSchema } from 'dagent-ai';
-import { jsonObjectSchema } from 'dagent-ai/contracts';
+import {
+  extraSystemPromptSchema,
+  jsonObjectSchema,
+  runtimeDirectorySchema,
+} from 'dagent-ai/contracts';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -22,6 +26,8 @@ export const appConfigSchema = z
     host: z.string().default('127.0.0.1'),
     port: z.number().int().min(1).max(65_535).default(8000),
     dataDirectory: z.string().default(join(homedir(), '.dagent-ts')),
+    runtimeDirectory: runtimeDirectorySchema.default('.runtime'),
+    extraSystemPrompt: extraSystemPromptSchema.optional(),
     webRoot: z.string().optional(),
     provider: z
       .object({

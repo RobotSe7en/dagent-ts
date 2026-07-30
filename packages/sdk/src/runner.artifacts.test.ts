@@ -9,6 +9,11 @@ import { createFileTools } from './capabilities/file-tools.js';
 import { tool } from './capabilities/tool.js';
 import { defineStaticDag } from './contracts/agents.js';
 import { Runner } from './runner.js';
+
+const runnerPaths = {
+  workspace: '/tmp/dagent-ts-artifact-tests',
+  runtimeDirectory: '.runtime',
+} as const;
 import { MockProvider } from './testing/mock-provider.js';
 
 const temporaryRoots: string[] = [];
@@ -23,6 +28,7 @@ describe('Runner static DAG artifacts', () => {
   it('tracks a capability-created artifact in the final checkpoint', async () => {
     const workspacePath = await temporaryRoot();
     const runner = new Runner({
+      ...runnerPaths,
       provider: new MockProvider([]),
       capabilities: createFileTools(),
     });
@@ -73,7 +79,11 @@ describe('Runner static DAG artifacts', () => {
       output: z.string(),
       execute: ({ text }) => text,
     });
-    const runner = new Runner({ provider: new MockProvider([]), capabilities: [echo] });
+    const runner = new Runner({
+      ...runnerPaths,
+      provider: new MockProvider([]),
+      capabilities: [echo],
+    });
     const target = defineStaticDag({
       schemaVersion: 1,
       id: 'missing_report',
@@ -114,7 +124,11 @@ describe('Runner static DAG artifacts', () => {
       output: z.null(),
       execute: () => null,
     });
-    const runner = new Runner({ provider: new MockProvider([]), capabilities: [noop] });
+    const runner = new Runner({
+      ...runnerPaths,
+      provider: new MockProvider([]),
+      capabilities: [noop],
+    });
     const target = defineStaticDag({
       schemaVersion: 1,
       id: 'optional_report',
@@ -148,6 +162,7 @@ describe('Runner static DAG artifacts', () => {
   it('materializes uploads before review and resumes without serializing file bytes', async () => {
     const workspacePath = await temporaryRoot();
     const runner = new Runner({
+      ...runnerPaths,
       provider: new MockProvider([]),
       capabilities: createFileTools(),
     });

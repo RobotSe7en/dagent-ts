@@ -12,6 +12,7 @@ export type PromptRequest = {
   readonly variables?: PromptVariables;
   readonly capabilities?: readonly CapabilityDefinition[];
   readonly context?: string;
+  readonly extraSystemPrompt?: string;
   readonly workspacePath?: string;
 };
 
@@ -24,28 +25,61 @@ export class PromptBuilder {
   }
 
   public buildSystemMessage(request: PromptRequest): ChatMessage {
-    const sections = [renderProfile(request.profile)];
-    if (request.workspacePath !== undefined) {
-      sections.push(
-        [
-          '## Runtime Context',
-          `- Workspace root: ${resolve(request.workspacePath)}`,
-          '- Resolve relative file paths from this workspace root.',
-        ].join('\n'),
-      );
-    }
+    const runtimeContext =
+      request.workspacePath === undefined
+        ? undefined
+        : runtimeContextForWorkspace(request.workspacePath);
+    const dynamicSections: string[] = [];
     if (request.capabilities !== undefined && request.capabilities.length > 0) {
-      sections.push(formatCapabilities(request.capabilities));
+      dynamicSections.push(formatCapabilities(request.capabilities));
     }
     if (request.context !== undefined && request.context.trim().length > 0) {
-      sections.push(`## Context\n${request.context.trim()}`);
+      dynamicSections.push(`## Context\n${request.context.trim()}`);
     }
-    return { role: 'system', content: sections.filter(Boolean).join('\n\n').trim() };
+    return {
+      role: 'system',
+      content: composeSystemPrompt(renderProfile(request.profile), {
+        ...(runtimeContext === undefined ? {} : { runtimeContext }),
+        ...(request.extraSystemPrompt === undefined
+          ? {}
+          : { extraSystemPrompt: request.extraSystemPrompt }),
+        dynamicSections,
+      }),
+    };
   }
 
   public buildUserMessage(task: string, variables: PromptVariables = {}): ChatMessage {
     return { role: 'user', content: renderTemplate(task, variables) };
   }
+}
+
+export function runtimeContextForWorkspace(workspacePath: string): string {
+  return [
+    '## Runtime Context',
+    `- Workspace root: ${resolve(workspacePath)}`,
+    '- Resolve relative file paths from this workspace root.',
+  ].join('\n');
+}
+
+export function composeSystemPrompt(
+  profilePrompt: string,
+  options: {
+    readonly runtimeContext?: string;
+    readonly extraSystemPrompt?: string;
+    readonly dynamicSections?: readonly string[];
+  } = {},
+): string {
+  return [
+    profilePrompt,
+    ...(options.runtimeContext === undefined ? [] : [options.runtimeContext]),
+    ...(options.extraSystemPrompt === undefined
+      ? []
+      : [`## Extra System Prompt\n${options.extraSystemPrompt}`]),
+    ...(options.dynamicSections ?? []),
+  ]
+    .filter((section) => section.length > 0)
+    .join('\n\n')
+    .trim();
 }
 
 export function renderTemplate(template: string, variables: PromptVariables): string {

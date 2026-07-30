@@ -29,6 +29,7 @@ import {
 import type { CapabilityDefinition, CapabilityInvocation } from '../contracts/index.js';
 import { DagentError, errorMessage, throwIfAborted } from '../errors.js';
 import type { ProviderTool } from '../providers/provider.js';
+import { composeSystemPrompt, runtimeContextForWorkspace } from '../profiles/prompt-builder.js';
 import { ContextAssembler } from './context-assembler.js';
 import { normalizeCapabilityResult } from './result-storage.js';
 import { withRetry } from './retry.js';
@@ -91,7 +92,15 @@ export class ToolAgentRuntime {
       throwIfAborted(context.signal);
       let compactionStarted = false;
       const prepared = await assembler.prepare({
-        systemMessage: { role: 'system', content: agent.systemPrompt },
+        systemMessage: {
+          role: 'system',
+          content: composeSystemPrompt(agent.systemPrompt, {
+            runtimeContext: runtimeContextForWorkspace(context.workspacePath),
+            ...(context.extraSystemPrompt === undefined
+              ? {}
+              : { extraSystemPrompt: context.extraSystemPrompt }),
+          }),
+        },
         conversation: thread,
         tools: providerTools,
         policy: agent.context,
@@ -254,6 +263,7 @@ export class ToolAgentRuntime {
     );
     const normalized = await normalizeCapabilityResult(result, {
       workspacePath: context.workspacePath,
+      runtimeDirectory: context.runtimeDirectory,
       policy: context.resultStoragePolicy,
     });
     await context.events.emit({ type: 'capability-completed', result: normalized.result });

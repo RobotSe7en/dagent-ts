@@ -1,6 +1,7 @@
 import type {
   Attachment,
   ChatMessage,
+  ContentReference,
   ContextPolicy,
   ContextSummary,
   ContextSummaryInput,
@@ -8,7 +9,7 @@ import type {
   ConversationItem,
   ConversationState,
   ProviderToolCall,
-  StoredContent,
+  ToolResultMessage,
 } from '../contracts/index.js';
 import {
   contextSummarySchema,
@@ -207,7 +208,7 @@ export class ContextAssembler {
     const toolBudgets = new Map<string, number>();
     for (const item of [...conversation.items].reverse()) {
       if (item.type !== 'tool-result') continue;
-      const fullTokens = this.#counter.countText(storedContentText(item.content));
+      const fullTokens = this.#counter.countText(toolResultText(item));
       const budget = Math.min(policy.maxToolResultTokens, remainingToolTokens);
       toolBudgets.set(item.id, Math.max(0, budget));
       remainingToolTokens = Math.max(0, remainingToolTokens - Math.min(fullTokens, budget));
@@ -233,7 +234,7 @@ export class ContextAssembler {
         historyTokens += this.#counter.countText(JSON.stringify(message));
       } else {
         const budget = toolBudgets.get(item.id) ?? 0;
-        const [content, truncated] = truncateToolContent(item.content, budget, this.#counter);
+        const [content, truncated] = truncateToolContent(item, budget, this.#counter);
         if (truncated) truncatedToolResults += 1;
         toolResultTokens += this.#counter.countText(content);
         messages.push({
@@ -303,21 +304,70 @@ function deterministicSummary(
 }
 
 function truncateToolContent(
-  content: StoredContent,
+  item: ToolResultMessage,
   budget: number,
   counter: TokenCounter,
 ): readonly [string, boolean] {
-  const text = storedContentText(content);
-  const reference =
-    content.type === 'dagent_content_reference'
-      ? `\n[Full result: ${content.path}; sha256=${content.sha256}; bytes=${content.byteLength}]`
-      : '';
-  if (budget <= 0) {
-    return [`[TOOL_RESULT_OMITTED: aggregate tool-result budget exhausted]${reference}`, true];
+  if (budget <= 0) return ['', true];
+  const text = storedContentText(item.content);
+  const references = toolResultReferences(item);
+  const lines = references.map(referenceLine);
+  const selected: string[] = [];
+  let omitted = 0;
+  for (const [index, line] of lines.entries()) {
+    const remaining = lines.length - index - 1;
+    const candidate = [...selected, line];
+    const candidateOmitted = omitted + remaining;
+    if (candidateOmitted > 0) {
+      candidate.push(`[${candidateOmitted} stored result references omitted]`);
+    }
+    if (counter.countText(candidate.join('\n')) <= budget) {
+      selected.push(line);
+    } else {
+      omitted += 1;
+    }
   }
-  const available = Math.max(16, budget - counter.countText(reference));
+  if (omitted > 0) selected.push(`[${omitted} stored result references omitted]`);
+  let referenceText = selected.join('\n');
+  if (referenceText !== '' && counter.countText(referenceText) > budget) {
+    [referenceText] = truncateText(
+      `[${references.length} stored result references omitted]`,
+      budget,
+      counter,
+    );
+  }
+  const separatorTokens = text !== '' && referenceText !== '' ? counter.countText('\n') : 0;
+  const available = Math.max(0, budget - counter.countText(referenceText) - separatorTokens);
   const [projected, truncated] = truncateText(text, available, counter);
-  return [projected + reference, truncated || content.type === 'dagent_content_reference'];
+  return [
+    [projected, referenceText].filter((part) => part !== '').join('\n'),
+    truncated || references.length > 0 || omitted > 0,
+  ];
+}
+
+function toolResultText(item: ToolResultMessage): string {
+  return [storedContentText(item.content), ...toolResultReferences(item).map(referenceLine)]
+    .filter((part) => part !== '')
+    .join('\n');
+}
+
+function toolResultReferences(item: ToolResultMessage): readonly ContentReference[] {
+  const candidates = [
+    ...(item.content.type === 'dagent_content_reference' ? [item.content] : []),
+    ...(item.valueReference === undefined ? [] : [item.valueReference]),
+    ...item.artifacts,
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((reference) => {
+    const identity = `${reference.path}\0${reference.sha256}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function referenceLine(reference: ContentReference): string {
+  return `[Stored result: path=${reference.path}; media_type=${reference.mediaType}; bytes=${reference.byteLength}; sha256=${reference.sha256}]`;
 }
 
 export function userContentForModel(content: string, attachments: readonly Attachment[]): string {

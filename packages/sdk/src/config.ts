@@ -57,13 +57,11 @@ const contextOverrideSchema = z
 const resultStorageOverrideSchema = z
   .object({
     maxInlineBytes: z.number().int().min(1024).optional(),
-    internalDirectory: z.string().min(1).optional(),
   })
   .strict();
 
 export const runnerConfigSchema = z
   .object({
-    workspace: z.string().default('.dagent-ts'),
     builtins: z.array(z.enum(['files', 'shell', 'memory'])).default(['files', 'shell', 'memory']),
     sandbox: z
       .object({
@@ -120,6 +118,9 @@ export async function createRunnerFromConfigFile(
   pathValue: string,
   options: {
     readonly provider: ChatProvider;
+    readonly workspace: string;
+    readonly runtimeDirectory: string;
+    readonly extraSystemPrompt?: string;
     readonly capabilities?: readonly CapabilityBinding[];
   },
 ): Promise<Runner> {
@@ -158,7 +159,11 @@ export async function createRunnerFromConfigFile(
     provider: options.provider,
     capabilities: [...builtins, ...moduleCapabilities, ...(options.capabilities ?? [])],
     agents: config.agents,
-    workspace: resolve(root, config.workspace),
+    workspace: resolve(options.workspace),
+    runtimeDirectory: options.runtimeDirectory,
+    ...(options.extraSystemPrompt === undefined
+      ? {}
+      : { extraSystemPrompt: options.extraSystemPrompt }),
     limits: executionLimitsSchema.parse(config.limits),
     context: contextPolicySchema.parse(config.context),
     resultStorage: resultStoragePolicySchema.parse(config.resultStorage),

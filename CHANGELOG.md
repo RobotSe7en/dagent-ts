@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.3
+
+- Added a validated runner-level `extraSystemPrompt` that is frozen into V4 run plans and applied
+  to ToolAgent, dynamic DAG planning/replanning, selected AutoAgent execution, and registered
+  agents without affecting routing or validation classifiers.
+- Advanced canonical conversation revisions when reviewed dynamic DAG execution fails, replans,
+  and reaches another review boundary.
+- Made `workspace` and `runtimeDirectory` explicit SDK inputs, moved private conversation, result,
+  and restored-history data under the host-selected runtime directory, and removed
+  `ResultStoragePolicy.internalDirectory`.
+- Upgraded resumable plans and checkpoints to V4 while retaining V3 run/conversation state,
+  preserving pre-`extraSystemPrompt` V4 fingerprints, and rejecting V3 checkpoints.
+- Added lazy private-directory creation, verified in-place continuation resources, and bounded,
+  de-duplicated model projection for content, value, and artifact references.
+
 ## 0.8.0
 
 - Rebuilt the SDK around immutable TypeScript discriminated unions, Zod boundary parsing, typed

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,7 +35,7 @@ describe('ConversationResourceStore', () => {
         }),
       ],
     });
-    const resources = new ConversationResourceStore(root);
+    const resources = new ConversationResourceStore(root, '.runtime');
 
     await resources.persist(conversation, firstWorkspace);
     await rm(firstWorkspace, { recursive: true, force: true });
@@ -47,10 +47,39 @@ describe('ConversationResourceStore', () => {
     const restoredAttachment = restoredUser.attachments[0];
     expect(restoredAttachment).toBeDefined();
     if (restoredAttachment === undefined) return;
-    expect(restoredAttachment.path).toBe(`.dagent/history/${restoredAttachment.sha256}.md`);
+    expect(restoredAttachment.path).toBe(`.runtime/history/${restoredAttachment.sha256}.md`);
     await expect(readFile(join(secondWorkspace, restoredAttachment.path), 'utf8')).resolves.toBe(
       '# durable input',
     );
+  });
+
+  it('reuses a verified resource already reachable in the continuation workspace', async () => {
+    const root = await temporaryDirectory();
+    const workspace = join(root, 'run');
+    const [attachment] = await materializeInputUploads(
+      [{ filename: 'existing.txt', content: Buffer.from('already here') }],
+      workspace,
+    );
+    const conversation = conversationStateSchema.parse({
+      schemaVersion: 3,
+      id: 'conversation-existing',
+      revision: 7,
+      items: [
+        userMessageSchema.parse({
+          type: 'user',
+          content: 'Continue.',
+          attachments: [attachment],
+        }),
+      ],
+    });
+    const backingRoot = join(root, 'backing');
+    const resources = new ConversationResourceStore(backingRoot, '.runtime');
+
+    const restored = await resources.materialize(conversation, workspace);
+
+    expect(restored).toBe(conversation);
+    expect(restored.revision).toBe(7);
+    await expect(access(join(backingRoot, '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each(['../escape.txt', 'safe/../../escape.txt', 'C:/escape.txt'])(

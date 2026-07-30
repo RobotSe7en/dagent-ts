@@ -19,7 +19,12 @@ const echo = tool({
   execute: ({ text }) => ({ text }),
 });
 
-await using runner = new Runner({ provider, capabilities: [echo] });
+await using runner = new Runner({
+  provider,
+  capabilities: [echo],
+  workspace: './.dagent-ts',
+  runtimeDirectory: '.runtime',
+});
 const assistant = defineToolAgent({
   kind: 'tool-agent',
   id: 'assistant',

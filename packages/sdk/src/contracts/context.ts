@@ -27,18 +27,8 @@ export const resultStoragePolicySchema = z
       .int()
       .min(1024)
       .default(256 * 1024),
-    internalDirectory: z.string().min(1).default('.dagent/results'),
   })
-  .strict()
-  .refine(
-    ({ internalDirectory }) =>
-      !internalDirectory.startsWith('/') &&
-      internalDirectory.split('/').every((part) => part !== '' && part !== '.' && part !== '..'),
-    {
-      message: 'internalDirectory must be a safe relative POSIX path.',
-      path: ['internalDirectory'],
-    },
-  );
+  .strict();
 export type ResultStoragePolicy = z.infer<typeof resultStoragePolicySchema>;
 
 export const contextUsageSchema = z

@@ -4,7 +4,7 @@ Dagent 是面向 TypeScript 的类型安全 Agent 与 DAG 运行时。本仓库�
 版本的逐行翻译：核心模型重新划分为不可变契约、能力目录、执行运行时、持久化应用和
 模块化 Web UI。
 
-> `reference/dagent/` 是与上游 0.8.0 工作树同步的只读 Python 参考副本，不参与构建或提交。
+> `reference/dagent/` 是与上游 0.8.3 工作树同步的只读 Python 参考副本，不参与构建或提交。
 
 ## 工作区
 
@@ -57,6 +57,10 @@ const runner = new Runner({
     streamIncludeUsage: false,
   }),
   capabilities: [echo],
+  workspace: './.dagent-ts',
+  runtimeDirectory: '.runtime',
+  // 可选：冻结到每次运行的 V4 plan；按原字符串传给 Tool/DAG Agent。
+  extraSystemPrompt: 'Follow the host application response policy.',
 });
 
 const agent = defineToolAgent({
@@ -84,7 +88,8 @@ OpenAI-compatible Provider 默认使用兼容性更好的 `json_object` 结构�
 - 所有能力拥有统一定义、输入/输出校验、风险等级和边界声明。
 - V3 `ConversationState` 是唯一权威会话；推理和内部项可审计，但不会回放进后续模型上下文，
   公共 API 只投影用户可见项。
-- 高风险能力和 DAG 可形成精确、带版本的审核检查点。
+- 高风险能力和 DAG 可形成精确、带版本的 V4 审核检查点；运行目录和初始附加系统提示
+  都会冻结，恢复不依赖当前 Runner 配置。
 - 本地文件访问使用词法边界与真实路径双重校验。
 - SSE 事件先持久化再广播，客户端可用 `Last-Event-ID` 恢复。
 

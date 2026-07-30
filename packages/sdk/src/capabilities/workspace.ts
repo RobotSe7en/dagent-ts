@@ -123,8 +123,16 @@ export class Workspace {
         throw error;
       });
       if (info === undefined) {
-        await mkdir(next);
-        current = next;
+        await mkdir(next).catch((error: unknown) => {
+          if (!isAlreadyExistsError(error)) throw error;
+        });
+        const actual = await realpath(next);
+        this.#assertWithin(actual);
+        const actualInfo = await lstat(actual);
+        if (!actualInfo.isDirectory()) {
+          throw new DagentError('WORKSPACE_VIOLATION', `Path '${next}' is not a directory.`);
+        }
+        current = actual;
         continue;
       }
       if (!info.isDirectory() && !info.isSymbolicLink()) {
@@ -158,5 +166,11 @@ export class Workspace {
 function isMissingPathError(error: unknown): boolean {
   return (
     error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return (
+    error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EEXIST'
   );
 }

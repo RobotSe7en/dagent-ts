@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { defineDagAgent, defineToolAgent } from './contracts/agents.js';
 import { tool } from './capabilities/tool.js';
 import { Runner } from './runner.js';
+
+const runnerPaths = {
+  workspace: '/tmp/dagent-ts-runner-tests',
+  runtimeDirectory: '.runtime',
+} as const;
 import { MockProvider } from './testing/mock-provider.js';
 
 describe('Runner tool agent', () => {
@@ -29,6 +34,7 @@ describe('Runner tool agent', () => {
       },
     ]);
     const runner = new Runner({
+      ...runnerPaths,
       provider,
       capabilities: [echo],
     });
@@ -86,7 +92,7 @@ describe('Runner tool agent', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider, capabilities: [repeat] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [repeat] });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'assistant',
@@ -145,7 +151,7 @@ describe('Runner tool agent', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider, capabilities: [risky] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [risky] });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'assistant',
@@ -194,7 +200,7 @@ describe('Runner tool agent', () => {
         toolCalls: [{ id: 'call-mutable', name: 'tool.mutable-risky', arguments: {} }],
       },
     ]);
-    const runner = new Runner({ provider, capabilities: [risky] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [risky] });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'mutable-review-agent',
@@ -252,7 +258,7 @@ describe('Runner tool agent', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider, capabilities: [failing] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [failing] });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'reviewed-failure-agent',
@@ -320,7 +326,7 @@ describe('Runner tool agent', () => {
         ],
       },
     ]);
-    const runner = new Runner({ provider, capabilities: [write] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [write] });
     const agent = defineToolAgent({
       kind: 'tool-agent',
       id: 'repeated-review-agent',
@@ -379,7 +385,7 @@ describe('Runner tool agent', () => {
         toolCalls: [],
       },
     ]);
-    const runner = new Runner({ provider });
+    const runner = new Runner({ ...runnerPaths, provider });
     const agent = defineDagAgent({
       kind: 'dag-agent',
       id: 'planner',
@@ -439,7 +445,7 @@ describe('Runner tool agent', () => {
       toolCalls: [],
     };
     const provider = new MockProvider([planReply, planReply]);
-    const runner = new Runner({ provider, capabilities: [flaky] });
+    const runner = new Runner({ ...runnerPaths, provider, capabilities: [flaky] });
     const agent = defineDagAgent({
       kind: 'dag-agent',
       id: 'planner',
