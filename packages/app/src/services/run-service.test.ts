@@ -20,6 +20,63 @@ afterEach(async () => {
 });
 
 describe('RunService', () => {
+  it('runs project conversations inside the project workspace', async () => {
+    const directory = await temporaryDirectory();
+    const projectRoot = join(directory, 'project');
+    const database = await openDatabase(join(directory, 'app.sqlite3'));
+    const repository = new AppRepository(database);
+    const project = await repository.createProject({ name: 'Project', rootPath: projectRoot });
+    const conversation = await repository.createConversation({
+      projectId: project.id,
+      title: 'Workspace',
+    });
+    let observedWorkspace: string | undefined;
+    const inspect = tool({
+      id: 'tool.inspect-workspace',
+      input: z.object({}).strict(),
+      output: z.string(),
+      execute: (_input, context) => {
+        observedWorkspace = context.workspacePath;
+        return context.workspacePath;
+      },
+    });
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-workspace', name: 'tool.inspect-workspace', arguments: {} }],
+      },
+      { content: 'done', reasoningContent: '', refusal: '', toolCalls: [] },
+    ]);
+    const runner = new Runner({
+      provider,
+      capabilities: [inspect],
+      workspace: join(directory, 'host-runs'),
+      runtimeDirectory: '.runtime',
+    });
+    const service = new RunService(runner, repository);
+    const agent = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'assistant',
+      name: 'Assistant',
+      scope: { capabilities: ['tool.inspect-workspace'] },
+      reviewLevel: 'never',
+    });
+
+    const runId = await service.start({
+      conversationId: conversation.id,
+      target: agent,
+      runInput: { prompt: 'inspect' },
+    });
+    const stored = await waitForRun(repository, runId);
+
+    expect(observedWorkspace).toBe(projectRoot);
+    expect(stored.checkpoint?.state.workspacePath).toBe(projectRoot);
+    await service.close();
+    await database.destroy();
+  });
+
   it('persists one canonical V3 conversation while keeping reasoning out of replay', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dagent-app-'));
     temporaryDirectories.push(directory);
@@ -70,6 +127,7 @@ describe('RunService', () => {
     const firstUpdate = await repository.getConversation(conversation.id);
 
     expect(stored.status).toBe('completed');
+    expect(stored.checkpoint?.state.workspacePath).toBe(project.rootPath);
     expect((await repository.eventsAfter(runId, 0)).at(-1)?.type).toBe('run-completed');
     expect(stored.input).toEqual({ prompt: 'Hello' });
     expect(firstUpdate).toBeDefined();

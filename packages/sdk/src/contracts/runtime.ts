@@ -55,6 +55,7 @@ export const pendingReviewSchema = z
     kind: z.enum(['dag-review', 'capability-review']),
     summary: z.string(),
     proposedGraph: dagSpecSchema.optional(),
+    rerunNodeIds: z.array(z.string()).readonly().default([]),
     invocation: capabilityInvocationSchema.optional(),
     createdAt: timestampSchema,
   })
@@ -100,6 +101,8 @@ const resolvedRunPlanPayloadShape = {
   capabilityIds: z.array(z.string()),
   capabilityFingerprints: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
   skillIds: z.array(z.string()),
+  agentIds: z.array(z.string()),
+  agentFingerprints: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
   limits: executionLimitsSchema,
   contextPolicy: contextPolicySchema.prefault({}),
   resultStoragePolicy: resultStoragePolicySchema.prefault({}),
@@ -122,6 +125,9 @@ export const resolvedRunPlanSchema = z
     const {
       capabilityIds,
       capabilityFingerprints,
+      skillIds,
+      agentIds,
+      agentFingerprints,
       contextWindowTokens,
       outputReserveTokens,
       fingerprint,
@@ -146,6 +152,31 @@ export const resolvedRunPlanSchema = z
         code: 'custom',
         message: 'capabilityFingerprints must exactly match unique capabilityIds.',
         path: ['capabilityFingerprints'],
+      });
+    }
+    const canonicalSkillIds = [...new Set(skillIds)].sort();
+    if (
+      canonicalSkillIds.length !== skillIds.length ||
+      canonicalSkillIds.some((id, index) => id !== skillIds[index])
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'skillIds must be unique and sorted.',
+        path: ['skillIds'],
+      });
+    }
+    const canonicalAgentIds = [...new Set(agentIds)].sort();
+    const agentFingerprintIds = Object.keys(agentFingerprints).sort();
+    if (
+      canonicalAgentIds.length !== agentIds.length ||
+      canonicalAgentIds.some((id, index) => id !== agentIds[index]) ||
+      canonicalAgentIds.length !== agentFingerprintIds.length ||
+      canonicalAgentIds.some((id, index) => id !== agentFingerprintIds[index])
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'agentFingerprints must exactly match unique sorted agentIds.',
+        path: ['agentFingerprints'],
       });
     }
     const expectedFingerprint = sha256(

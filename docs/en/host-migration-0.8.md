@@ -103,6 +103,7 @@ The V4 plan freezes:
 
 - target
 - capability ids and definition fingerprints
+- effective Skill ids, Agent ids, and Agent-definition fingerprints
 - limits, context, result storage, and validation
 - workspace and `runtimeDirectory`
 - initial `extraSystemPrompt`

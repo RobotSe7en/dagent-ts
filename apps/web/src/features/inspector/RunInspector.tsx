@@ -15,7 +15,17 @@ import { api } from '../../api/client.js';
 import { useWorkspace } from '../../state/workspace.js';
 
 export function RunInspector() {
-  const { inspectorOpen, toggleInspector, runEvents, conversationId } = useWorkspace();
+  const {
+    inspectorOpen,
+    toggleInspector,
+    runEvents: trackedRunEvents,
+    projectId,
+    conversationId,
+    runProjectId,
+    runConversationId,
+  } = useWorkspace();
+  const runEvents =
+    runProjectId === projectId && runConversationId === conversationId ? trackedRunEvents : [];
   const [tab, setTab] = useState<'activity' | 'context'>('activity');
   const conversation = useQuery({
     queryKey: ['conversation', conversationId],

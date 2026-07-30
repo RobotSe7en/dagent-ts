@@ -75,12 +75,7 @@ export function registerRunRoutes(
     const { id } = runParametersSchema.parse(request.params);
     const run = await repository.getRun(id);
     if (run === undefined) return notFound(reply, 'Run');
-    if (
-      run.status === 'running' ||
-      run.status === 'pending' ||
-      run.status === 'planning' ||
-      run.status === 'resuming'
-    ) {
+    if (!canDeleteRun(run.status)) {
       return reply.status(409).send({
         error: { code: 'RUN_ACTIVE', message: 'An active run cannot be deleted.' },
       });
@@ -151,8 +146,11 @@ export function registerRunRoutes(
       const visible = publicRunEvent(event);
       if (visible !== undefined) reply.raw.write(serializeServerEvent(event, visible));
     };
-    const unsubscribe = runs.on(id, send);
-    for (const event of await runs.eventsAfter(id, after)) send(event);
+    const unsubscribe = await subscribeRunEvents(
+      () => runs.eventsAfter(id, after),
+      (listener) => runs.on(id, listener),
+      send,
+    );
     const heartbeat = setInterval(() => {
       if (!reply.raw.destroyed) reply.raw.write(': heartbeat\n\n');
     }, 15_000);
@@ -162,6 +160,36 @@ export function registerRunRoutes(
       unsubscribe();
     });
   });
+}
+
+export function canDeleteRun(status: string): boolean {
+  return ['completed', 'failed', 'cancelled', 'interrupted'].includes(status);
+}
+
+export async function subscribeRunEvents(
+  loadBacklog: () => Promise<readonly RunEvent[]>,
+  subscribe: (listener: (event: RunEvent) => void) => () => void,
+  send: (event: RunEvent) => void,
+): Promise<() => void> {
+  let replaying = true;
+  const buffered: RunEvent[] = [];
+  const unsubscribe = subscribe((event) => {
+    if (replaying) buffered.push(event);
+    else send(event);
+  });
+  try {
+    const backlog = await loadBacklog();
+    for (const event of [...backlog, ...buffered].sort(
+      (left, right) => left.sequence - right.sequence,
+    )) {
+      send(event);
+    }
+    replaying = false;
+    return unsubscribe;
+  } catch (error) {
+    unsubscribe();
+    throw error;
+  }
 }
 
 function serializeServerEvent(event: RunEvent, payload: unknown): string {

@@ -39,6 +39,7 @@ export class RunService {
     let prepared: {
       readonly input: RunInput;
       readonly conversationRevision?: number;
+      readonly workspacePath?: string;
     };
     try {
       prepared = await this.#withConversation(input.conversationId, input.runInput);
@@ -66,6 +67,7 @@ export class RunService {
         resolveStarted,
         rejectStarted,
         prepared.conversationRevision,
+        prepared.workspacePath,
       ),
     );
     return started;
@@ -167,12 +169,17 @@ export class RunService {
     resolveStarted: (runId: RunId) => void,
     rejectStarted: (error: unknown) => void,
     conversationRevision?: number,
+    workspacePath?: string,
   ): Promise<void> {
     let runId: RunId | undefined;
     let checkpoint: RunCheckpoint | undefined;
     let retainConversationClaim = false;
     try {
-      for await (const event of this.runner.stream(target, input)) {
+      for await (const event of this.runner.stream(
+        target,
+        input,
+        workspacePath === undefined ? {} : { workspacePath },
+      )) {
         if (runId === undefined) {
           const startedRunId = event.runId;
           await this.repository.insertRun({
@@ -223,18 +230,27 @@ export class RunService {
   ): Promise<{
     readonly input: RunInput;
     readonly conversationRevision?: number;
+    readonly workspacePath?: string;
   }> {
-    if (conversationId === undefined || !('prompt' in input)) return { input };
+    if (conversationId === undefined) return { input };
     const stored = await this.repository.getConversation(conversationId);
     if (stored === undefined) {
       throw new Error(`Conversation '${conversationId}' was not found.`);
     }
+    const project = await this.repository.getProject(stored.projectId);
+    if (project === undefined) {
+      throw new Error(`Project '${stored.projectId}' was not found.`);
+    }
     return {
-      input: {
-        ...input,
-        conversation: requireConversationState(stored),
-      },
-      conversationRevision: stored.revision,
+      input:
+        'prompt' in input
+          ? {
+              ...input,
+              conversation: requireConversationState(stored),
+            }
+          : input,
+      ...('prompt' in input ? { conversationRevision: stored.revision } : {}),
+      workspacePath: project.rootPath,
     };
   }
 

@@ -381,22 +381,24 @@ export function subscribeRun(
   onError: (error: Event) => void,
 ): () => void {
   const source = new EventSource(`/api/v1/runs/${runId}/events`);
-  const eventTypes: RunEvent['type'][] = [
-    'run-started',
-    'token',
-    'plan-proposed',
-    'review-required',
-    'node-started',
-    'node-completed',
-    'capability-started',
-    'capability-completed',
-    'checkpoint',
-    'context-compaction-started',
-    'context-compaction-finished',
-    'context-usage',
-    'run-completed',
-  ];
-  for (const type of eventTypes) {
+  const eventTypeMap = {
+    'run-started': true,
+    token: true,
+    'plan-proposed': true,
+    'review-required': true,
+    'node-started': true,
+    'node-completed': true,
+    'capability-started': true,
+    'capability-completed': true,
+    checkpoint: true,
+    'context-compaction-started': true,
+    'context-compaction-finished': true,
+    'context-usage': true,
+    'validation-started': true,
+    'validation-finished': true,
+    'run-completed': true,
+  } as const satisfies Record<RunEvent['type'], true>;
+  for (const type of Object.keys(eventTypeMap) as RunEvent['type'][]) {
     source.addEventListener(type, (event) => {
       listener(JSON.parse((event as MessageEvent<string>).data) as RunEvent);
     });

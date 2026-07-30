@@ -49,6 +49,17 @@ export type ResumeCapability = {
 };
 
 export class ToolAgentRuntime {
+  #lastConversation: ConversationState | undefined;
+  #lastContextUsage: readonly ContextUsage[] = [];
+
+  public get lastConversation(): ConversationState | undefined {
+    return this.#lastConversation;
+  }
+
+  public get lastContextUsage(): readonly ContextUsage[] {
+    return this.#lastContextUsage;
+  }
+
   public async run(
     agent: ToolAgent,
     input: ToolAgentInput,
@@ -59,162 +70,177 @@ export class ToolAgentRuntime {
       input.conversation ?? { schemaVersion: 3 },
     );
     let thread = conversationStateSchema.parse(initialConversation);
-    if (input.prompt !== undefined) {
-      const userTurn = input.promptKind !== 'internal-continuation';
-      const prompt = userMessageSchema.parse({
-        type: 'user',
-        runId: context.runId,
-        content: input.prompt,
-        attachments: input.attachments ?? [],
-        scope: input.promptScope ?? (userTurn ? 'conversation' : 'validator'),
-        visibility: userTurn ? 'user' : 'internal',
-      });
-      thread = appendConversationItems(thread, prompt);
-    }
     const contextUsages: ContextUsage[] = [];
-    const assembler = new ContextAssembler({
-      contextWindowTokens: context.contextWindowTokens,
-      outputReserveTokens: context.outputReserveTokens,
-    });
-    const capabilityIds = [
-      ...agent.scope.capabilities,
-      ...(agent.scope.skills.length === 0 ? [] : ['skill.list', 'skill.view']),
-    ];
-    const definitions = context.catalog.definitions(capabilityIds);
-    const providerTools = definitions.map(toProviderTool);
+    try {
+      if (input.prompt !== undefined) {
+        const userTurn = input.promptKind !== 'internal-continuation';
+        const prompt = userMessageSchema.parse({
+          type: 'user',
+          runId: context.runId,
+          content: input.prompt,
+          attachments: input.attachments ?? [],
+          scope: input.promptScope ?? (userTurn ? 'conversation' : 'validator'),
+          visibility: userTurn ? 'user' : 'internal',
+        });
+        thread = appendConversationItems(thread, prompt);
+      }
+      const assembler = new ContextAssembler({
+        contextWindowTokens: context.contextWindowTokens,
+        outputReserveTokens: context.outputReserveTokens,
+      });
+      const capabilityIds = [
+        ...agent.scope.capabilities,
+        ...(agent.scope.skills.length === 0 ? [] : ['skill.list', 'skill.view']),
+      ];
+      const definitions = context.catalog.definitions(capabilityIds);
+      const providerTools = definitions.map(toProviderTool);
 
-    if (resume !== undefined) {
-      const reviewed = await this.#resumeCapability(resume, context, agent.scope.skills);
-      thread = appendConversationItems(thread, reviewed);
-    }
+      if (resume !== undefined) {
+        const reviewed = await this.#resumeCapability(resume, context, agent.scope.skills);
+        thread = replaceToolResult(thread, reviewed);
+      }
 
-    for (let step = 0; step < agent.maxSteps; step += 1) {
-      throwIfAborted(context.signal);
-      let compactionStarted = false;
-      const prepared = await assembler.prepare({
-        systemMessage: {
-          role: 'system',
-          content: composeSystemPrompt(agent.systemPrompt, {
-            runtimeContext: runtimeContextForWorkspace(context.workspacePath),
-            ...(context.extraSystemPrompt === undefined
-              ? {}
-              : { extraSystemPrompt: context.extraSystemPrompt }),
-          }),
-        },
-        conversation: thread,
-        tools: providerTools,
-        policy: agent.context,
-        compact: async (previous, items, maxTokens) => {
-          compactionStarted = true;
-          await context.events.emit({
-            type: 'context-compaction-started',
-            scope: 'conversation',
-            itemCount: items.length,
-          });
-          const summary = await this.#compactHistory(previous, items, maxTokens, context);
+      for (let step = 0; step < agent.maxSteps; step += 1) {
+        throwIfAborted(context.signal);
+        let compactionStarted = false;
+        const prepared = await assembler.prepare({
+          systemMessage: {
+            role: 'system',
+            content: composeSystemPrompt(agent.systemPrompt, {
+              runtimeContext: runtimeContextForWorkspace(context.workspacePath),
+              ...(context.extraSystemPrompt === undefined
+                ? {}
+                : { extraSystemPrompt: context.extraSystemPrompt }),
+            }),
+          },
+          conversation: thread,
+          tools: providerTools,
+          policy: agent.context,
+          compact: async (previous, items, maxTokens) => {
+            compactionStarted = true;
+            await context.events.emit({
+              type: 'context-compaction-started',
+              scope: 'conversation',
+              itemCount: items.length,
+            });
+            const summary = await this.#compactHistory(previous, items, maxTokens, context);
+            await context.events.emit({
+              type: 'context-compaction-finished',
+              scope: 'conversation',
+              itemCount: items.length,
+              method: 'model',
+            });
+            return summary;
+          },
+        });
+        thread = prepared.conversation;
+        contextUsages.push(prepared.usage);
+        if (compactionStarted && prepared.usage.compactionMethod === 'deterministic-fallback') {
           await context.events.emit({
             type: 'context-compaction-finished',
             scope: 'conversation',
-            itemCount: items.length,
-            method: 'model',
+            itemCount: prepared.usage.compactedItems,
+            method: 'deterministic-fallback',
           });
-          return summary;
-        },
-      });
-      thread = prepared.conversation;
-      contextUsages.push(prepared.usage);
-      if (compactionStarted && prepared.usage.compactionMethod === 'deterministic-fallback') {
+        }
         await context.events.emit({
-          type: 'context-compaction-finished',
+          type: 'context-usage',
           scope: 'conversation',
-          itemCount: prepared.usage.compactedItems,
-          method: 'deterministic-fallback',
+          usage: prepared.usage,
         });
-      }
-      await context.events.emit({
-        type: 'context-usage',
-        scope: 'conversation',
-        usage: prepared.usage,
-      });
 
-      context.budget.reserveModelCall(context.signal);
-      const response = await this.#chat(prepared.messages, providerTools, context);
-      const assistant = assistantMessageSchema.parse({
-        type: 'assistant',
-        runId: context.runId,
-        content: response.content,
-        reasoning: response.reasoningContent,
-        refusal: response.refusal,
-        ...(response.usage === undefined ? {} : { usage: response.usage }),
-        toolCalls: response.toolCalls,
-        scope: 'conversation',
-        visibility: response.toolCalls.length === 0 ? 'user' : 'internal',
-      });
-      thread = appendConversationItems(thread, assistant);
+        context.budget.reserveModelCall(context.signal);
+        const response = await this.#chat(prepared.messages, providerTools, context);
+        const assistant = assistantMessageSchema.parse({
+          type: 'assistant',
+          runId: context.runId,
+          content: response.content,
+          reasoning: response.reasoningContent,
+          refusal: response.refusal,
+          ...(response.usage === undefined ? {} : { usage: response.usage }),
+          toolCalls: response.toolCalls,
+          scope: 'conversation',
+          visibility: response.toolCalls.length === 0 ? 'user' : 'internal',
+        });
+        thread = appendConversationItems(thread, assistant);
 
-      if (response.toolCalls.length === 0) {
-        return {
-          status: 'completed',
-          conversation: thread,
-          contextUsage: contextUsages,
-          output: response.content,
-        };
-      }
-
-      for (const call of response.toolCalls) {
-        const binding = context.catalog.get(call.name);
-        if (binding === undefined || !binding.definition.enabled) {
-          const failed = invalidToolCallResult(
-            call,
-            context.runId,
-            `Capability '${call.name}' is not available.`,
-          );
-          thread = appendConversationItems(thread, failed);
-          continue;
-        }
-        let arguments_: JsonObject;
-        try {
-          arguments_ = jsonObjectSchema.parse(binding.input.parse(call.arguments));
-        } catch (error) {
-          const failed = invalidToolCallResult(
-            call,
-            context.runId,
-            `Invalid arguments for '${call.name}': ${errorMessage(error)}`,
-          );
-          thread = appendConversationItems(thread, failed);
-          continue;
-        }
-        const definition = binding.definition;
-        const invocation: CapabilityInvocation = {
-          id: invocationIdSchema.parse(call.id),
-          capabilityId: definition.id,
-          arguments: arguments_,
-        };
-        if (requiresReview(definition, agent.reviewLevel)) {
-          const review = pendingReviewSchema.parse({
-            id: createReviewId(),
-            revision: thread.revision,
-            kind: 'capability-review',
-            summary: `Approve ${definition.id} (${definition.risk})`,
-            invocation,
-            createdAt: new Date().toISOString(),
-          });
-          await context.events.emit({ type: 'review-required', review });
+        if (response.toolCalls.length === 0) {
           return {
-            status: 'awaiting-review',
+            status: 'completed',
             conversation: thread,
             contextUsage: contextUsages,
-            review,
+            output: response.content,
           };
         }
-        const result = await this.#invoke(invocation, context, agent.scope.skills);
-        thread = appendConversationItems(thread, result);
+
+        for (const [callIndex, call] of response.toolCalls.entries()) {
+          const binding = context.catalog.get(call.name);
+          if (binding === undefined || !binding.definition.enabled) {
+            const failed = invalidToolCallResult(
+              call,
+              context.runId,
+              `Capability '${call.name}' is not available.`,
+            );
+            thread = appendConversationItems(thread, failed);
+            continue;
+          }
+          let arguments_: JsonObject;
+          try {
+            arguments_ = jsonObjectSchema.parse(binding.input.parse(call.arguments));
+          } catch (error) {
+            const failed = invalidToolCallResult(
+              call,
+              context.runId,
+              `Invalid arguments for '${call.name}': ${errorMessage(error)}`,
+            );
+            thread = appendConversationItems(thread, failed);
+            continue;
+          }
+          const definition = binding.definition;
+          const invocation: CapabilityInvocation = {
+            id: invocationIdSchema.parse(call.id),
+            capabilityId: definition.id,
+            arguments: arguments_,
+          };
+          if (requiresReview(definition, agent.reviewLevel)) {
+            thread = appendConversationItems(
+              thread,
+              pendingToolCallResult(invocation, context.runId),
+            );
+            for (const skippedCall of response.toolCalls.slice(callIndex + 1)) {
+              thread = appendConversationItems(
+                thread,
+                skippedToolCallResult(skippedCall, context.runId),
+              );
+            }
+            const review = pendingReviewSchema.parse({
+              id: createReviewId(),
+              revision: thread.revision,
+              kind: 'capability-review',
+              summary: `Approve ${definition.id} (${definition.risk})`,
+              invocation,
+              createdAt: new Date().toISOString(),
+            });
+            await context.events.emit({ type: 'review-required', review });
+            return {
+              status: 'awaiting-review',
+              conversation: thread,
+              contextUsage: contextUsages,
+              review,
+            };
+          }
+          const result = await this.#invoke(invocation, context, agent.scope.skills);
+          thread = appendConversationItems(thread, result);
+        }
       }
+      throw new DagentError(
+        'BUDGET_EXCEEDED',
+        `Tool agent '${agent.id}' exceeded maxSteps (${agent.maxSteps}).`,
+      );
+    } finally {
+      this.#lastConversation = thread;
+      this.#lastContextUsage = [...contextUsages];
     }
-    throw new DagentError(
-      'BUDGET_EXCEEDED',
-      `Tool agent '${agent.id}' exceeded maxSteps (${agent.maxSteps}).`,
-    );
   }
 
   async #chat(
@@ -392,6 +418,63 @@ function invalidToolCallResult(
     content: inlineContent(message),
     scope: 'conversation',
     visibility: 'internal',
+  });
+}
+
+function skippedToolCallResult(
+  call: { readonly id: string; readonly name: string },
+  runId: RunId,
+): ToolResultMessage {
+  return toolResultMessageSchema.parse({
+    type: 'tool-result',
+    runId,
+    callId: call.id,
+    name: call.name,
+    status: 'skipped',
+    content: inlineContent(
+      'Skipped because an earlier capability call from the same response requires review.',
+    ),
+    scope: 'conversation',
+    visibility: 'internal',
+  });
+}
+
+function pendingToolCallResult(invocation: CapabilityInvocation, runId: RunId): ToolResultMessage {
+  return toolResultMessageSchema.parse({
+    type: 'tool-result',
+    runId,
+    callId: invocation.id,
+    name: invocation.capabilityId,
+    capabilityId: invocation.capabilityId,
+    status: 'pending-review',
+    content: inlineContent('Waiting for user review.'),
+    scope: 'conversation',
+    visibility: 'internal',
+  });
+}
+
+function replaceToolResult(
+  conversation: ConversationState,
+  replacement: ToolResultMessage,
+): ConversationState {
+  const index = conversation.items.findIndex(
+    (item) => item.type === 'tool-result' && item.callId === replacement.callId,
+  );
+  if (index < 0) return appendConversationItems(conversation, replacement);
+  const current = conversation.items[index];
+  if (current === undefined) return appendConversationItems(conversation, replacement);
+  return conversationStateSchema.parse({
+    ...conversation,
+    revision: conversation.revision + 1,
+    items: conversation.items.map((item, itemIndex) =>
+      itemIndex === index
+        ? {
+            ...replacement,
+            id: current.id,
+            ...(current.runId === undefined ? {} : { runId: current.runId }),
+          }
+        : item,
+    ),
   });
 }
 

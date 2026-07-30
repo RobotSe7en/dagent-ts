@@ -12,6 +12,7 @@ import type {
   JsonObject,
   PlanProposal,
   Attachment,
+  ToolAgent,
 } from '../contracts/index.js';
 import {
   appendConversationItems,
@@ -22,6 +23,11 @@ import {
   userMessageSchema,
 } from '../contracts/index.js';
 import { assertValidDag } from '../domain/dag-validation.js';
+import {
+  graphAgentIds,
+  graphCapabilityIds,
+  validateReplanTransition,
+} from '../domain/dag-transition.js';
 import { DagentError, errorMessage } from '../errors.js';
 import { composeSystemPrompt, runtimeContextForWorkspace } from '../profiles/prompt-builder.js';
 import { ContextAssembler } from './context-assembler.js';
@@ -48,6 +54,7 @@ export class DynamicPlanner {
     agent: DagAgent,
     input: DynamicPlanInput,
     context: RuntimeExecutionContext,
+    availableAgents: readonly ToolAgent[],
   ): Promise<DynamicPlanResult> {
     const baseConversation = conversationStateSchema.parse(
       input.conversation ?? { schemaVersion: 3 },
@@ -77,6 +84,7 @@ export class DynamicPlanner {
         agent,
         definitions,
         input,
+        availableAgents,
         context.workspacePath,
         context.extraSystemPrompt,
       ),
@@ -132,6 +140,7 @@ export class DynamicPlanner {
     });
 
     const allowedCapabilities = new Set(definitions.map(({ id }) => id));
+    const allowedAgents = new Set(availableAgents.map(({ id }) => id));
     const requestPlan = async (messages: readonly ChatMessage[]): Promise<ChatResponse> => {
       context.budget.reserveModelCall(context.signal);
       return withRetry(
@@ -154,7 +163,12 @@ export class DynamicPlanner {
     let response = await requestPlan(prepared.messages);
     let proposal: PlanProposal;
     try {
-      proposal = validateProposal(parseJsonObject(response.content), allowedCapabilities, input);
+      proposal = validateProposal(
+        parseJsonObject(response.content),
+        allowedCapabilities,
+        allowedAgents,
+        input,
+      );
     } catch (firstError) {
       response = await requestPlan([
         ...prepared.messages,
@@ -171,7 +185,12 @@ export class DynamicPlanner {
         },
       ]);
       try {
-        proposal = validateProposal(parseJsonObject(response.content), allowedCapabilities, input);
+        proposal = validateProposal(
+          parseJsonObject(response.content),
+          allowedCapabilities,
+          allowedAgents,
+          input,
+        );
       } catch (repairError) {
         throw new DagentError(
           'PROVIDER_FAILED',
@@ -204,18 +223,22 @@ function plannerSystemPrompt(
   agent: DagAgent,
   definitions: readonly { readonly id: string; readonly description: string }[],
   input: DynamicPlanInput,
+  availableAgents: readonly ToolAgent[],
   workspacePath: string,
   extraSystemPrompt: string | undefined,
 ): string {
   const capabilityLines = definitions.map(
     (definition) => `- ${definition.id}: ${definition.description}`,
   );
+  const agentLines = availableAgents.map(
+    ({ id, name, description }) => `- ${id}: ${name}${description ? ` — ${description}` : ''}`,
+  );
   const replan =
     input.previousGraph === undefined
       ? ''
       : `\nThis is a replan. Previous graph:\n${JSON.stringify(input.previousGraph)}\nFailure: ${
           input.failure ?? 'unspecified'
-        }\nCompleted nodes that must not be changed: ${JSON.stringify(
+        }\nCompleted nodes may only be changed or rerun when their ids are included in rerunNodeIds: ${JSON.stringify(
           input.completedNodeIds ?? [],
         )}`;
   return composeSystemPrompt(agent.systemPrompt, {
@@ -228,7 +251,10 @@ or loop nodes for control flow. Never output source code. Return only the struct
 matching the supplied JSON Schema.
 
 Capabilities:
-${capabilityLines.join('\n')}${replan}`,
+${capabilityLines.join('\n')}
+
+Agents:
+${agentLines.join('\n')}${replan}`,
     ],
   });
 }
@@ -236,10 +262,14 @@ ${capabilityLines.join('\n')}${replan}`,
 function validateProposal(
   value: JsonObject,
   allowedCapabilities: ReadonlySet<string>,
+  allowedAgents: ReadonlySet<string>,
   input: DynamicPlanInput,
 ): PlanProposal {
   const parsed = planProposalSchema.parse(value);
   const graph = assertValidDag(parsed.graph);
+  if (input.previousGraph === undefined && parsed.rerunNodeIds.length > 0) {
+    throw new DagentError('DAG_VALIDATION_FAILED', 'Initial plans cannot request rerunNodeIds.');
+  }
   for (const capabilityId of graphCapabilityIds(graph)) {
     if (!allowedCapabilities.has(capabilityId)) {
       throw new DagentError(
@@ -248,27 +278,23 @@ function validateProposal(
       );
     }
   }
-  if (input.previousGraph !== undefined) {
-    const oldNodes = new Map(input.previousGraph.nodes.map((node) => [node.id, node]));
-    const newNodes = new Map(graph.nodes.map((node) => [node.id, node]));
-    for (const nodeId of input.completedNodeIds ?? []) {
-      if (JSON.stringify(oldNodes.get(nodeId)) !== JSON.stringify(newNodes.get(nodeId))) {
-        throw new DagentError(
-          'DAG_VALIDATION_FAILED',
-          `Replan changed protected completed node '${nodeId}'.`,
-        );
-      }
+  for (const agentId of graphAgentIds(graph)) {
+    if (!allowedAgents.has(agentId)) {
+      throw new DagentError(
+        'DAG_VALIDATION_FAILED',
+        `Planner selected unavailable agent '${agentId}'.`,
+      );
     }
   }
+  if (input.previousGraph !== undefined) {
+    validateReplanTransition(
+      input.previousGraph,
+      graph,
+      input.completedNodeIds ?? [],
+      parsed.rerunNodeIds,
+    );
+  }
   return planProposalSchema.parse({ ...parsed, graph });
-}
-
-function graphCapabilityIds(graph: DAGSpec): string[] {
-  return graph.nodes.flatMap((node) => {
-    if (node.kind === 'capability') return [node.capabilityId];
-    if (node.kind === 'agent') return [];
-    return graphCapabilityIds(node.graph);
-  });
 }
 
 function parseJsonObject(content: string): JsonObject {

@@ -98,6 +98,7 @@ V4 plan 冻结：
 
 - target
 - capability ids 与定义 fingerprint
+- 实际 Skill ids、Agent ids 与 Agent 定义 fingerprint
 - limits、context、result storage、validation
 - workspace 与 `runtimeDirectory`
 - 初始 `extraSystemPrompt`

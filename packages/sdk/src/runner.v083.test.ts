@@ -518,7 +518,7 @@ describe('Runner 0.8.1-0.8.3 contracts', () => {
       output: { $expr: { type: 'node-output' as const, nodeId: 'work', path: [] } },
     };
     const plan = {
-      content: JSON.stringify({ graph, rationale: 'review it', rerunNodeIds: ['work'] }),
+      content: JSON.stringify({ graph, rationale: 'review it', rerunNodeIds: [] }),
       reasoningContent: '',
       refusal: '',
       toolCalls: [],
