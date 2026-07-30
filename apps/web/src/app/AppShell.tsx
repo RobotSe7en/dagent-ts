@@ -11,6 +11,7 @@ import { lazy, Suspense, useState } from 'react';
 import { ChatWorkspace } from '../features/chat/ChatWorkspace.js';
 import { RunInspector } from '../features/inspector/RunInspector.js';
 import { ProjectSidebar } from '../features/projects/ProjectSidebar.js';
+import { RunMonitor } from '../features/run/RunMonitor.js';
 import { SettingsDrawer } from '../features/settings/SettingsDrawer.js';
 import { type WorkspaceMode, useWorkspace } from '../state/workspace.js';
 
@@ -38,6 +39,7 @@ export function AppShell() {
   const { mode, setMode, inspectorOpen, toggleInspector, activeRunId } = useWorkspace();
   return (
     <div className="app-shell">
+      <RunMonitor />
       <ProjectSidebar />
       <div className="app-main">
         <nav className="topbar">

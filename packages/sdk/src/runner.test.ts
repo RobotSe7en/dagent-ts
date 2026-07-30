@@ -439,7 +439,7 @@ describe('Runner tool agent', () => {
       output: { $expr: { type: 'node-output' as const, nodeId: 'work', path: [] } },
     };
     const planReply = {
-      content: JSON.stringify({ graph, rationale: '', rerunNodeIds: ['work'] }),
+      content: JSON.stringify({ graph, rationale: '', rerunNodeIds: [] }),
       reasoningContent: '',
       refusal: '',
       toolCalls: [],

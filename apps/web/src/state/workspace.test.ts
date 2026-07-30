@@ -8,7 +8,10 @@ beforeEach(() => {
     conversationId: undefined,
     mode: 'chat',
     activeRunId: undefined,
+    runProjectId: undefined,
+    runConversationId: undefined,
     runEvents: [],
+    runStreamError: '',
     inspectorOpen: true,
   });
 });
@@ -44,12 +47,12 @@ describe('workspace state', () => {
     expect(useWorkspace.getState().runEvents).toEqual([]);
 
     useWorkspace.getState().appendRunEvent({
-      type: 'run-started',
+      type: 'run-completed',
       runId: 'new-run' as never,
       sequence: 1,
       timestamp: new Date().toISOString(),
+      outcome: 'completed',
     });
-    useWorkspace.getState().clearRun();
 
     expect(useWorkspace.getState().activeRunId).toBeUndefined();
     expect(useWorkspace.getState().runEvents).toHaveLength(1);
@@ -70,11 +73,49 @@ describe('workspace state', () => {
       outcome: 'completed' as const,
     };
 
+    useWorkspace.getState().beginRun('run' as never);
     useWorkspace.getState().appendRunEvent(first);
     useWorkspace.getState().appendRunEvent(first);
     useWorkspace.getState().appendRunEvent(second);
+    useWorkspace.getState().appendRunEvent(first);
 
     expect(useWorkspace.getState().runEvents.map(({ sequence }) => sequence)).toEqual([1, 2]);
+  });
+
+  it('keeps an awaiting-review run active until a terminal outcome arrives', () => {
+    useWorkspace.getState().beginRun('review-run' as never);
+    useWorkspace.getState().appendRunEvent({
+      type: 'run-completed',
+      runId: 'review-run' as never,
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      outcome: 'awaiting-review',
+    });
+
+    expect(useWorkspace.getState().activeRunId).toBe('review-run');
+  });
+
+  it('keeps an active run associated with the conversation that started it', () => {
+    useWorkspace.getState().selectProject('project-a');
+    useWorkspace.getState().selectConversation('conversation-a');
+    useWorkspace.getState().beginRun('run-a' as never);
+
+    useWorkspace.getState().selectConversation('conversation-b');
+
+    expect(useWorkspace.getState()).toMatchObject({
+      activeRunId: 'run-a',
+      runProjectId: 'project-a',
+      runConversationId: 'conversation-a',
+      conversationId: 'conversation-b',
+    });
+    useWorkspace.getState().appendRunEvent({
+      type: 'run-completed',
+      runId: 'different-run' as never,
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      outcome: 'completed',
+    });
+    expect(useWorkspace.getState().activeRunId).toBe('run-a');
   });
 
   it('toggles the inspector independently from the active workspace mode', () => {

@@ -20,9 +20,13 @@ export class AgentService {
   ) {}
 
   public async initialize(): Promise<void> {
-    for (const stored of await this.repository.list()) {
-      await this.#validateScope(stored.config);
-      this.runner.replaceAgent(stored.config);
+    const storedAgents = await this.repository.list();
+    for (const stored of storedAgents) this.runner.replaceAgent(stored.config);
+    try {
+      for (const stored of storedAgents) await this.#validateScope(stored.config);
+    } catch (error) {
+      for (const stored of storedAgents) this.runner.unregisterAgent(stored.config.id);
+      throw error;
     }
   }
 
@@ -104,6 +108,16 @@ export class AgentService {
         );
       }
     }
+    for (const agentId of agentAgentIds(config)) {
+      const agent = this.runner.agent(agentId);
+      if (agent === undefined || agent.kind !== 'tool-agent') {
+        throw new AgentServiceError(
+          'AGENT_SCOPE_INVALID',
+          `Agent '${config.id}' references unavailable nested ToolAgent '${agentId}'.`,
+          400,
+        );
+      }
+    }
   }
 }
 
@@ -125,6 +139,17 @@ function agentSkillIds(config: ToolAgent | DagAgent | AutoAgent): readonly strin
       ...config.scope.skills,
       ...config.toolAgent.scope.skills,
       ...config.dagAgent.scope.skills,
+    ]),
+  ];
+}
+
+function agentAgentIds(config: ToolAgent | DagAgent | AutoAgent): readonly string[] {
+  if (config.kind !== 'auto-agent') return config.scope.agents;
+  return [
+    ...new Set([
+      ...config.scope.agents,
+      ...config.toolAgent.scope.agents,
+      ...config.dagAgent.scope.agents,
     ]),
   ];
 }

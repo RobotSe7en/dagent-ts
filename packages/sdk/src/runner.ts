@@ -37,14 +37,13 @@ import type {
   ArtifactStates,
   ArtifactUpload,
   Attachment,
-  CapabilityDefinition,
   ContextPolicy,
   ConversationState,
   DAGSpec,
   DagAgent,
   ExecutionLimits,
-  JsonObject,
   JsonValue,
+  JsonObject,
   ResolvedRunPlan,
   ResultStoragePolicy,
   ReviewDecision,
@@ -59,6 +58,7 @@ import type {
   ValidationRecord,
 } from './contracts/index.js';
 import { assertValidDag } from './domain/dag-validation.js';
+import { reusableNodeResults } from './domain/dag-transition.js';
 import { DagentError, errorMessage } from './errors.js';
 import { sha256 } from './internal/stable-json.js';
 import { McpManager } from './mcp/index.js';
@@ -75,6 +75,14 @@ import {
 } from './runtime/conversation-resources.js';
 import { RunEventEmitter } from './runtime/events.js';
 import { ExecutionBudget } from './runtime/execution-budget.js';
+import {
+  assertGraphWithinPlan,
+  graphRequiresRiskReview,
+  plannerAgents,
+  resolveExecutionScope,
+  resolvedAgentsForPlan,
+  validateResolvedExecutionScope,
+} from './runtime/execution-scope.js';
 import { ToolAgentRuntime } from './runtime/tool-agent.js';
 import type { AgentLoopResult, RuntimeExecutionContext } from './runtime/types.js';
 import { createSkillCapabilities, SkillStore } from './skills/index.js';
@@ -348,7 +356,12 @@ export class Runner implements AsyncDisposable {
     listener?: (event: RunEvent) => void | Promise<void>,
   ): Promise<RunOutcome> {
     this.#assertOpen();
-    const checkpoint = validateCheckpoint(checkpointValue, this.catalog);
+    const checkpoint = await validateCheckpoint(
+      checkpointValue,
+      this.catalog,
+      this.#agents,
+      this.skills,
+    );
     const decision = reviewDecisionSchema.parse(decisionValue);
     const review = checkpoint.state.pendingReview;
     if (review === undefined) {
@@ -382,6 +395,7 @@ export class Runner implements AsyncDisposable {
       budget,
       checkpoint.plan,
     );
+    let failureState = checkpoint.state;
     try {
       if (decision.action === 'reject' && review.kind === 'dag-review') {
         const state = runStateSchema.parse({
@@ -402,16 +416,42 @@ export class Runner implements AsyncDisposable {
           );
         }
         const agent = capabilityResumeAgent(target);
-        const result = await new ToolAgentRuntime().run(
-          agent,
-          {
-            ...(checkpoint.state.conversation === undefined
-              ? {}
-              : { conversation: checkpoint.state.conversation }),
-          },
-          context,
-          { invocation: review.invocation, decision },
-        );
+        const runtime = new ToolAgentRuntime();
+        let result: AgentLoopResult;
+        try {
+          result = await runtime.run(
+            agent,
+            {
+              ...(checkpoint.state.conversation === undefined
+                ? {}
+                : { conversation: checkpoint.state.conversation }),
+            },
+            context,
+            { invocation: review.invocation, decision },
+          );
+        } catch (error) {
+          if (runtime.lastConversation !== undefined) {
+            failureState = runStateSchema.parse({
+              ...checkpoint.state,
+              status: 'running',
+              conversation: runtime.lastConversation,
+              contextUsage: [...checkpoint.state.contextUsage, ...runtime.lastContextUsage],
+              pendingReview: undefined,
+              revision: checkpoint.state.revision + 1,
+              updatedAt: nowTimestamp(),
+            });
+          }
+          throw error;
+        }
+        failureState = runStateSchema.parse({
+          ...checkpoint.state,
+          status: 'running',
+          conversation: result.conversation,
+          contextUsage: [...checkpoint.state.contextUsage, ...result.contextUsage],
+          pendingReview: undefined,
+          revision: checkpoint.state.revision + 1,
+          updatedAt: nowTimestamp(),
+        });
         return this.#continueToolAgent(
           agent,
           lastUserRequest(result.conversation),
@@ -424,9 +464,24 @@ export class Runner implements AsyncDisposable {
       const graph = assertValidDag(
         decision.replacementGraph ?? review.proposedGraph ?? checkpoint.state.graph,
       );
+      assertGraphWithinPlan(graph, checkpoint.plan);
+      const reviewedGraph = review.proposedGraph ?? checkpoint.state.graph;
+      const nodeResults =
+        decision.replacementGraph === undefined || reviewedGraph === undefined
+          ? checkpoint.state.nodeResults
+          : reusableNodeResults(reviewedGraph, graph, checkpoint.state.nodeResults, []);
+      const approvedState = runStateSchema.parse({
+        ...checkpoint.state,
+        status: 'running',
+        graph,
+        nodeResults,
+        pendingReview: undefined,
+        revision: checkpoint.state.revision + 1,
+        updatedAt: nowTimestamp(),
+      });
       try {
         return await this.#executeApprovedGraph(
-          checkpoint.state,
+          approvedState,
           checkpoint.plan,
           budget,
           emitter,
@@ -443,13 +498,13 @@ export class Runner implements AsyncDisposable {
           ),
           graph,
           error,
-          checkpoint.state,
+          approvedState,
           checkpoint.plan,
           context,
         );
       }
     } catch (error) {
-      return this.#failedOutcome(checkpoint.state, checkpoint.plan, budget, emitter, error);
+      return this.#failedOutcome(failureState, checkpoint.plan, budget, emitter, error, signal);
     } finally {
       this.#active.delete(checkpoint.state.runId);
     }
@@ -485,54 +540,59 @@ export class Runner implements AsyncDisposable {
         ? controller.signal
         : AbortSignal.any([controller.signal, options.signal]);
     this.#active.set(runId, controller);
-    const workspacePath = resolve(
-      options.workspacePath ?? this.#workspace,
-      options.workspacePath === undefined ? `runs/${runId}` : '',
-    );
-    await mkdir(workspacePath, { recursive: true });
-    const preparedInput: PreparedRunInput = isAgentInput(input)
-      ? await this.#prepareAgentInput(input, workspacePath)
-      : input;
-    const emitter = new RunEventEmitter(runId, listener);
-    const limits = executionLimitsSchema.parse({ ...this.#limits, ...options.limits });
-    const budget = new ExecutionBudget(limits);
-    const plan = createResolvedPlan(
-      target,
-      this.catalog,
-      limits,
-      this.#contextForTarget(target),
-      this.#resultStorage,
-      this.#runtimeDirectory,
-      this.#contextWindowTokens ??
-        readProviderNumber(this.#provider, 'contextWindowTokens', 32_768),
-      this.#outputReserveTokens ?? readProviderNumber(this.#provider, 'outputReserveTokens', 4096),
-      this.#validation,
-      this.#extraSystemPrompt,
-    );
-    const timestamp = nowTimestamp();
-    const initialState = runStateSchema.parse({
-      schemaVersion: 3,
-      runId,
-      status: 'pending',
-      targetKind: target.kind,
-      ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
-        ? { conversation: preparedInput.conversation }
-        : {}),
-      graphInput: isAgentInput(preparedInput) ? {} : (preparedInput.graphInput ?? {}),
-      nodeResults: {},
-      workspacePath,
-      revision: 0,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      contextUsage: [],
-    });
-    const context = this.#runtimeContext(runId, workspacePath, signal, emitter, budget, plan);
     try {
-      await emitter.emit({ type: 'run-started' });
-      const outcome = await this.#dispatch(target, preparedInput, initialState, plan, context);
-      return outcome;
-    } catch (error) {
-      return this.#failedOutcome(initialState, plan, budget, emitter, error);
+      const workspacePath = resolve(
+        options.workspacePath ?? this.#workspace,
+        options.workspacePath === undefined ? `runs/${runId}` : '',
+      );
+      await mkdir(workspacePath, { recursive: true });
+      const preparedInput: PreparedRunInput = isAgentInput(input)
+        ? await this.#prepareAgentInput(input, workspacePath)
+        : input;
+      const emitter = new RunEventEmitter(runId, listener);
+      const limits = executionLimitsSchema.parse({ ...this.#limits, ...options.limits });
+      const budget = new ExecutionBudget(limits);
+      const plan = await createResolvedPlan(
+        target,
+        this.catalog,
+        this.#agents,
+        this.skills,
+        limits,
+        this.#contextForTarget(target),
+        this.#resultStorage,
+        this.#runtimeDirectory,
+        this.#contextWindowTokens ??
+          readProviderNumber(this.#provider, 'contextWindowTokens', 32_768),
+        this.#outputReserveTokens ??
+          readProviderNumber(this.#provider, 'outputReserveTokens', 4096),
+        this.#validation,
+        this.#extraSystemPrompt,
+      );
+      const timestamp = nowTimestamp();
+      const initialState = runStateSchema.parse({
+        schemaVersion: 3,
+        runId,
+        status: 'pending',
+        targetKind: target.kind,
+        ...(isAgentInput(preparedInput) && preparedInput.conversation !== undefined
+          ? { conversation: preparedInput.conversation }
+          : {}),
+        graphInput: isAgentInput(preparedInput) ? {} : (preparedInput.graphInput ?? {}),
+        nodeResults: {},
+        workspacePath,
+        revision: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        contextUsage: [],
+      });
+      const context = this.#runtimeContext(runId, workspacePath, signal, emitter, budget, plan);
+      try {
+        await emitter.emit({ type: 'run-started' });
+        const outcome = await this.#dispatch(target, preparedInput, initialState, plan, context);
+        return outcome;
+      } catch (error) {
+        return this.#failedOutcome(initialState, plan, budget, emitter, error, signal);
+      }
     } finally {
       this.#active.delete(runId);
     }
@@ -565,9 +625,11 @@ export class Runner implements AsyncDisposable {
         return this.#runDynamic(target, requireAgentInput(input), state, plan, context);
       case 'auto-agent': {
         const route = await this.#route(target, requireAgentInput(input), context);
+        const toolAgent = inheritAutoScope(target.toolAgent, target);
+        const dagAgent = inheritAutoScope(target.dagAgent, target);
         return route === 'tool'
-          ? this.#dispatch(target.toolAgent, input, state, plan, context)
-          : this.#runDynamic(target.dagAgent, requireAgentInput(input), state, plan, context);
+          ? this.#dispatch(toolAgent, input, state, plan, context)
+          : this.#runDynamic(dagAgent, requireAgentInput(input), state, plan, context);
       }
       case 'static-dag': {
         const graphInput = isAgentInput(input) ? {} : (input.graphInput ?? {});
@@ -587,7 +649,7 @@ export class Runner implements AsyncDisposable {
           revision: state.revision + 1,
           updatedAt: nowTimestamp(),
         });
-        if (requiresDagReview(target.reviewLevel, target.graph, this.catalog)) {
+        if (requiresDagReview(target.reviewLevel, target.graph, this.catalog, this.#agents)) {
           return this.#awaitDagReview(prepared, plan, context, target.graph, 'Review static DAG');
         }
         const executing = runStateSchema.parse({
@@ -624,6 +686,7 @@ export class Runner implements AsyncDisposable {
         ...(isPreparedAgentInput(input) ? { attachments: input.attachments } : {}),
       },
       context,
+      plannerAgents(agent, plan, this.#agents),
     );
     let currentState = state;
     let completedResults: RunState['nodeResults'] = {};
@@ -640,13 +703,16 @@ export class Runner implements AsyncDisposable {
         revision: currentState.revision + 1,
         updatedAt: nowTimestamp(),
       });
-      if (requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog)) {
+      if (
+        requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog, this.#agents)
+      ) {
         return this.#awaitDagReview(
           plannedState,
           plan,
           context,
           planned.proposal.graph,
           planned.proposal.rationale || 'Review dynamic DAG',
+          planned.proposal.rerunNodeIds,
         );
       }
       try {
@@ -662,7 +728,8 @@ export class Runner implements AsyncDisposable {
         if (attempt >= agent.maxReplans || context.signal.aborted) throw error;
         completedResults = completedNodeResults(error);
         currentState = partialRunState(error, state.runId) ?? plannedState;
-        planned = await planner.plan(
+        const previousGraph = planned.proposal.graph;
+        const nextPlan = await planner.plan(
           agent,
           {
             prompt: input.prompt,
@@ -672,7 +739,15 @@ export class Runner implements AsyncDisposable {
             completedNodeIds: Object.keys(completedResults),
           },
           context,
+          plannerAgents(agent, plan, this.#agents),
         );
+        completedResults = reusableNodeResults(
+          previousGraph,
+          nextPlan.proposal.graph,
+          completedResults,
+          nextPlan.proposal.rerunNodeIds,
+        );
+        planned = nextPlan;
         usages.push(...planned.contextUsage);
       }
     }
@@ -687,20 +762,26 @@ export class Runner implements AsyncDisposable {
     context: RuntimeExecutionContext,
     graph: DAGSpec,
   ): Promise<RunOutcome> {
+    assertGraphWithinPlan(graph, plan);
+    const executionAgents = resolvedAgentsForPlan(plan, this.#agents);
     const executor = new DagExecutor(async (agentId, prompt, nestedContext) => {
-      const agent = this.#agents.get(agentId);
+      const agent = executionAgents.get(agentId);
       if (agent === undefined) {
-        throw new DagentError('INVALID_INPUT', `Agent '${agentId}' is not registered.`);
-      }
-      if (agent.kind !== 'tool-agent') {
         throw new DagentError(
-          'INVALID_INPUT',
-          `Nested agent '${agentId}' must currently be a ToolAgent.`,
+          'CHECKPOINT_MISMATCH',
+          `Agent '${agentId}' is outside the resolved execution scope.`,
         );
       }
-      const result = await new ToolAgentRuntime().run(agent, { prompt }, nestedContext);
+      const result = await new ToolAgentRuntime().run(
+        { ...agent, reviewLevel: 'never' },
+        { prompt },
+        nestedContext,
+      );
       if (result.status === 'awaiting-review') {
-        throw new DagentError('REVIEW_REQUIRED', `Nested agent '${agentId}' requires review.`);
+        throw new DagentError(
+          'CHECKPOINT_MISMATCH',
+          `Approved nested agent '${agentId}' unexpectedly requested review.`,
+        );
       }
       return result.output;
     });
@@ -789,6 +870,13 @@ export class Runner implements AsyncDisposable {
           completedNodeIds: Object.keys(completedResults),
         },
         context,
+        plannerAgents(agent, plan, this.#agents),
+      );
+      completedResults = reusableNodeResults(
+        graph,
+        planned.proposal.graph,
+        completedResults,
+        planned.proposal.rerunNodeIds,
       );
       let conversation = planned.conversation;
       if (conversation.revision <= priorConversationRevision) {
@@ -809,13 +897,16 @@ export class Runner implements AsyncDisposable {
         revision: state.revision + 1,
         updatedAt: nowTimestamp(),
       });
-      if (requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog)) {
+      if (
+        requiresDagReview(agent.reviewLevel, planned.proposal.graph, this.catalog, this.#agents)
+      ) {
         return this.#awaitDagReview(
           plannedState,
           plan,
           context,
           planned.proposal.graph,
           planned.proposal.rationale || 'Review proposed DAG revision from replanning.',
+          planned.proposal.rerunNodeIds,
         );
       }
       try {
@@ -843,6 +934,7 @@ export class Runner implements AsyncDisposable {
     context: RuntimeExecutionContext,
     graph: DAGSpec,
     summary: string,
+    rerunNodeIds: readonly string[] = [],
   ): Promise<RunOutcome> {
     const review = pendingReviewSchema.parse({
       id: createReviewId(),
@@ -850,6 +942,7 @@ export class Runner implements AsyncDisposable {
       kind: 'dag-review',
       summary,
       proposedGraph: graph,
+      rerunNodeIds,
       createdAt: nowTimestamp(),
     });
     await context.events.emit({ type: 'review-required', review });
@@ -1051,9 +1144,12 @@ export class Runner implements AsyncDisposable {
     budget: ExecutionBudget,
     emitter: RunEventEmitter,
     error: unknown,
+    signal?: AbortSignal,
   ): Promise<RunOutcome> {
     const status =
-      error instanceof DagentError && error.code === 'ABORTED' ? 'cancelled' : 'failed';
+      signal?.aborted === true || (error instanceof DagentError && error.code === 'ABORTED')
+        ? 'cancelled'
+        : 'failed';
     const partialState = partialRunState(error, state.runId) ?? state;
     const failed = runStateSchema.parse({
       ...partialState,
@@ -1211,9 +1307,11 @@ function internalizeRunAssistant(conversation: ConversationState, runId: RunId):
   });
 }
 
-function createResolvedPlan(
+async function createResolvedPlan(
   target: RunTarget,
   catalog: CapabilityCatalog,
+  agents: ReadonlyMap<string, ToolAgent | DagAgent | AutoAgent>,
+  skills: SkillStore,
   limits: ExecutionLimits,
   contextPolicy: ContextPolicy,
   resultStoragePolicy: ResultStoragePolicy,
@@ -1222,18 +1320,12 @@ function createResolvedPlan(
   outputReserveTokens: number,
   validation: ValidationPolicy,
   extraSystemPrompt: string | undefined,
-): ResolvedRunPlan {
-  const capabilityIds = targetCapabilityIds(target);
-  const skillIds = target.kind === 'static-dag' ? [] : target.scope.skills;
-  const capabilityFingerprints = Object.fromEntries(
-    capabilityIds.map((id) => [id, capabilityFingerprint(catalog.require(id).definition)]),
-  );
+): Promise<ResolvedRunPlan> {
+  const scope = await resolveExecutionScope(target, catalog, agents, skills);
   const payload = resolvedRunPlanPayloadSchema.parse({
     schemaVersion: 4 as const,
     target,
-    capabilityIds,
-    capabilityFingerprints,
-    skillIds,
+    ...scope,
     limits,
     contextPolicy,
     resultStoragePolicy,
@@ -1249,66 +1341,20 @@ function createResolvedPlan(
   });
 }
 
-function validateCheckpoint(
+async function validateCheckpoint(
   checkpointValue: RunCheckpoint,
   catalog: CapabilityCatalog,
-): RunCheckpoint {
+  agents: ReadonlyMap<string, ToolAgent | DagAgent | AutoAgent>,
+  skills: SkillStore,
+): Promise<RunCheckpoint> {
   const checkpoint = runCheckpointSchema.parse(checkpointValue);
-  const { fingerprint, ...payload } = checkpoint.plan;
-  const expected = sha256(JSON.parse(JSON.stringify(payload)) as JsonValue);
-  if (expected !== fingerprint) {
-    throw new DagentError('CHECKPOINT_MISMATCH', 'Checkpoint plan fingerprint is invalid.');
-  }
-  for (const capabilityId of checkpoint.plan.capabilityIds) {
-    const binding = catalog.get(capabilityId);
-    if (binding === undefined) {
-      throw new DagentError(
-        'CHECKPOINT_MISMATCH',
-        `Checkpoint capability is not registered: ${capabilityId}`,
-      );
-    }
-    if (!binding.definition.enabled) {
-      throw new DagentError(
-        'CHECKPOINT_MISMATCH',
-        `Checkpoint capability is disabled: ${capabilityId}`,
-      );
-    }
-    if (
-      checkpoint.plan.capabilityFingerprints[capabilityId] !==
-      capabilityFingerprint(binding.definition)
-    ) {
-      throw new DagentError(
-        'CHECKPOINT_MISMATCH',
-        `Checkpoint capability definition changed: ${capabilityId}`,
-      );
-    }
-  }
+  await validateResolvedExecutionScope(checkpoint.plan, catalog, agents, skills);
   return checkpoint;
-}
-
-function capabilityFingerprint(definition: CapabilityDefinition): string {
-  return sha256(JSON.parse(JSON.stringify(definition)) as JsonValue);
-}
-
-function targetCapabilityIds(target: RunTarget): string[] {
-  if (target.kind === 'static-dag') {
-    return [...new Set(graphCapabilityIds(target.graph))];
-  }
-  if (target.kind === 'auto-agent') {
-    return [
-      ...new Set([
-        ...target.scope.capabilities,
-        ...target.toolAgent.scope.capabilities,
-        ...target.dagAgent.scope.capabilities,
-      ]),
-    ];
-  }
-  return [...target.scope.capabilities];
 }
 
 function dynamicAgentForTarget(target: RunTarget): DagAgent | undefined {
   if (target.kind === 'dag-agent') return target;
-  if (target.kind === 'auto-agent') return target.dagAgent;
+  if (target.kind === 'auto-agent') return inheritAutoScope(target.dagAgent, target);
   return undefined;
 }
 
@@ -1348,30 +1394,34 @@ function requiresDagReview(
   level: 'never' | 'risky' | 'always',
   graph: DAGSpec,
   catalog: CapabilityCatalog,
+  agents: ReadonlyMap<string, ToolAgent | DagAgent | AutoAgent>,
 ): boolean {
   if (level === 'never') return false;
   if (level === 'always') return true;
-  return graphCapabilityIds(graph).some((capabilityId) => {
-    const risk = catalog.require(capabilityId).definition.risk;
-    return risk === 'high' || risk === 'critical';
-  });
-}
-
-function graphCapabilityIds(graph: DAGSpec): string[] {
-  return graph.nodes.flatMap((node) => {
-    if (node.kind === 'capability') return [node.capabilityId];
-    if (node.kind === 'agent') return [];
-    return graphCapabilityIds(node.graph);
-  });
+  return graphRequiresRiskReview(graph, catalog, agents);
 }
 
 function capabilityResumeAgent(target: RunTarget): ToolAgent {
   if (target.kind === 'tool-agent') return target;
-  if (target.kind === 'auto-agent') return target.toolAgent;
+  if (target.kind === 'auto-agent') return inheritAutoScope(target.toolAgent, target);
   throw new DagentError(
     'CHECKPOINT_MISMATCH',
     `Target '${target.kind}' cannot resume a capability review.`,
   );
+}
+
+function inheritAutoScope<TAgent extends ToolAgent | DagAgent>(
+  agent: TAgent,
+  parent: AutoAgent,
+): TAgent {
+  return {
+    ...agent,
+    scope: {
+      capabilities: [...new Set([...parent.scope.capabilities, ...agent.scope.capabilities])],
+      skills: [...new Set([...parent.scope.skills, ...agent.scope.skills])],
+      agents: [...new Set([...parent.scope.agents, ...agent.scope.agents])],
+    },
+  };
 }
 
 function parseAgent(agent: ToolAgent | DagAgent | AutoAgent): ToolAgent | DagAgent | AutoAgent {

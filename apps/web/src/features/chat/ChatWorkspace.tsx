@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type { RunEvent, RunTarget } from 'dagent-ai';
 import {
   Bot,
@@ -14,18 +14,29 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { api, type PublicConversationItem, subscribeRun } from '../../api/client.js';
+import { api, type PublicConversationItem } from '../../api/client.js';
 import { EmptyState } from '../../components/EmptyState.js';
+import { ReviewBanner } from '../run/ReviewBanner.js';
 import { useWorkspace } from '../../state/workspace.js';
+import { projectStreamedContent } from './stream-projection.js';
 
 export function ChatWorkspace() {
-  const queryClient = useQueryClient();
-  const { conversationId, activeRunId, beginRun, appendRunEvent, clearRun, runEvents } =
-    useWorkspace();
+  const {
+    projectId,
+    conversationId,
+    activeRunId: trackedRunId,
+    runProjectId,
+    runConversationId,
+    beginRun,
+    runEvents: trackedRunEvents,
+    runStreamError,
+  } = useWorkspace();
+  const runMatchesSelection = runProjectId === projectId && runConversationId === conversationId;
+  const activeRunId = runMatchesSelection ? trackedRunId : undefined;
+  const runEvents = runMatchesSelection ? trackedRunEvents : [];
+  const streamError = runMatchesSelection ? runStreamError : '';
   const [prompt, setPrompt] = useState('');
   const [uploads, setUploads] = useState<readonly File[]>([]);
-  const [streamedContent, setStreamedContent] = useState('');
-  const [streamError, setStreamError] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversation = useQuery({
     queryKey: ['conversation', conversationId],
@@ -68,33 +79,10 @@ export function ChatWorkspace() {
     onSuccess: ({ runId }) => {
       setPrompt('');
       setUploads([]);
-      setStreamedContent('');
-      setStreamError('');
       beginRun(runId);
     },
   });
-
-  useEffect(() => {
-    if (activeRunId === undefined) return;
-    return subscribeRun(
-      activeRunId,
-      (event) => {
-        appendRunEvent(event);
-        if (event.type === 'token' && event.channel === 'content') {
-          setStreamedContent((content) => content + event.content);
-        }
-        if (event.type === 'run-completed') {
-          clearRun();
-          void queryClient.invalidateQueries({
-            queryKey: ['conversation', conversationId],
-          });
-        }
-      },
-      () => {
-        setStreamError('连接暂时中断，正在自动恢复事件流。');
-      },
-    );
-  }, [activeRunId, appendRunEvent, clearRun, conversationId, queryClient]);
+  const streamedContent = useMemo(() => runEvents.reduce(projectStreamedContent, ''), [runEvents]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -182,14 +170,18 @@ export function ChatWorkspace() {
         )}
       </div>
       {review !== undefined && activeRunId !== undefined ? (
-        <ReviewBanner runId={activeRunId} event={review} />
+        <ReviewBanner
+          key={`${review.review.id}:${review.review.revision}`}
+          runId={activeRunId}
+          event={review}
+        />
       ) : null}
       {streamError !== '' ? <div className="stream-warning">{streamError}</div> : null}
       <form
         className="composer"
         onSubmit={(event) => {
           event.preventDefault();
-          if (prompt.trim() !== '' && activeRunId === undefined) {
+          if (prompt.trim() !== '' && trackedRunId === undefined) {
             start.mutate({ text: prompt.trim(), uploads });
           }
         }}
@@ -218,7 +210,7 @@ export function ChatWorkspace() {
             <input
               type="file"
               multiple
-              disabled={activeRunId !== undefined}
+              disabled={trackedRunId !== undefined}
               onChange={(event) => {
                 const selected = [...(event.currentTarget.files ?? [])];
                 setUploads((current) => [...current, ...selected].slice(0, 32));
@@ -240,7 +232,7 @@ export function ChatWorkspace() {
             placeholder="描述任务，Shift + Enter 换行"
             rows={2}
           />
-          {activeRunId === undefined ? (
+          {trackedRunId === undefined ? (
             <button
               className="send-button"
               disabled={start.isPending || prompt.trim() === ''}
@@ -252,7 +244,7 @@ export function ChatWorkspace() {
                 <CornerDownLeft size={18} />
               )}
             </button>
-          ) : (
+          ) : activeRunId !== undefined ? (
             <button
               type="button"
               className="stop-button"
@@ -260,6 +252,10 @@ export function ChatWorkspace() {
               onClick={() => void api.cancelRun(activeRunId)}
             >
               <CircleStop size={18} />
+            </button>
+          ) : (
+            <button type="button" className="stop-button" title="另一会话正在运行" disabled>
+              <LoaderCircle className="spin" size={18} />
             </button>
           )}
         </div>
@@ -294,50 +290,6 @@ function Message(props: {
         {props.streaming ? <span className="typing-caret" /> : null}
       </div>
     </article>
-  );
-}
-
-function ReviewBanner(props: {
-  readonly runId: Parameters<typeof api.review>[0];
-  readonly event: Extract<RunEvent, { type: 'review-required' }>;
-}) {
-  const review = useMutation({
-    mutationFn: (action: 'approve' | 'reject') =>
-      api.review(props.runId, {
-        reviewId: props.event.review.id,
-        revision: props.event.review.revision,
-        action,
-        reason: '',
-      }),
-  });
-  if (review.isSuccess) return null;
-  return (
-    <div className="review-banner">
-      <div>
-        <strong>需要确认</strong>
-        <span>{props.event.review.summary}</span>
-        {review.error instanceof Error ? (
-          <span className="review-error">{review.error.message}</span>
-        ) : null}
-      </div>
-      <button
-        onClick={() => {
-          review.mutate('reject');
-        }}
-        disabled={review.isPending}
-      >
-        拒绝
-      </button>
-      <button
-        className="primary"
-        onClick={() => {
-          review.mutate('approve');
-        }}
-        disabled={review.isPending}
-      >
-        批准
-      </button>
-    </div>
   );
 }
 

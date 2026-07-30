@@ -1,10 +1,11 @@
 import { useMutation } from '@tanstack/react-query';
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from '@xyflow/react';
-import type { DAGSpec, RunTarget } from 'dagent-ai';
+import type { DAGSpec, RunEvent, RunTarget } from 'dagent-ai';
 import { Braces, CheckCircle2, Play, Workflow } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import { api, subscribeRun } from '../../api/client.js';
+import { api } from '../../api/client.js';
+import { ReviewBanner } from '../run/ReviewBanner.js';
 import { useWorkspace } from '../../state/workspace.js';
 
 const initialGraph: DAGSpec = {
@@ -19,7 +20,18 @@ const initialGraph: DAGSpec = {
 };
 
 export function DagWorkspace() {
-  const { conversationId, beginRun, appendRunEvent, clearRun } = useWorkspace();
+  const {
+    projectId,
+    conversationId,
+    activeRunId: trackedRunId,
+    runProjectId,
+    runConversationId,
+    runEvents: trackedRunEvents,
+    beginRun,
+  } = useWorkspace();
+  const runMatchesSelection = runProjectId === projectId && runConversationId === conversationId;
+  const activeRunId = runMatchesSelection ? trackedRunId : undefined;
+  const runEvents = runMatchesSelection ? trackedRunEvents : [];
   const [source, setSource] = useState(JSON.stringify(initialGraph, null, 2));
   const [validated, setValidated] = useState<DAGSpec>(initialGraph);
   const [notice, setNotice] = useState('编辑 JSON 后进行校验。');
@@ -48,20 +60,18 @@ export function DagWorkspace() {
     },
     onSuccess: ({ runId }) => {
       beginRun(runId);
-      let unsubscribe = (): void => undefined;
-      unsubscribe = subscribeRun(
-        runId,
-        (event) => {
-          appendRunEvent(event);
-          if (event.type === 'run-completed') {
-            clearRun();
-            unsubscribe();
-          }
-        },
-        () => undefined,
-      );
     },
   });
+  const review = useMemo(
+    () =>
+      [...runEvents]
+        .reverse()
+        .find(
+          (event): event is Extract<RunEvent, { type: 'review-required' }> =>
+            event.type === 'review-required',
+        ),
+    [runEvents],
+  );
   const flow = useMemo(() => toFlow(validated), [validated]);
 
   return (
@@ -82,6 +92,7 @@ export function DagWorkspace() {
           </button>
           <button
             className="primary"
+            disabled={trackedRunId !== undefined}
             onClick={() => {
               run.mutate();
             }}
@@ -91,6 +102,13 @@ export function DagWorkspace() {
           </button>
         </div>
       </header>
+      {review !== undefined && activeRunId !== undefined ? (
+        <ReviewBanner
+          key={`${review.review.id}:${review.review.revision}`}
+          runId={activeRunId}
+          event={review}
+        />
+      ) : null}
       <div className="dag-layout">
         <div className="dag-editor">
           <div className="panel-title">
