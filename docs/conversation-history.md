@@ -1,6 +1,6 @@
 # 会话历史与上下文
 
-这部分采用 0.8.0 V3 会话方案，不把“聊天记录”简化为 provider 消息数组，也不维护两份
+0.8 系列采用 V3 会话方案，不把“聊天记录”简化为 Provider messages，也不维护两份
 会话状态。
 
 ## 一个权威文档、两个投影视图
@@ -57,3 +57,63 @@ V4 审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹�
 
 数据库迁移不会在运行时猜测 V1/V2 结构：没有合法且 identity 匹配的 V3 文档会被标记为
 `legacy`，详情与继续运行接口返回 HTTP 409。
+
+## Revision 与并发
+
+`ConversationState.revision` 每次权威修改都单调增加。Host 使用 revision
+compare-and-swap 保存整体文档；更新行数不是 1 就表示并发冲突，运行失败而不是覆盖另一
+条请求的历史。
+
+同一会话一次只能拥有一个活动或等待审核的 run；新请求返回
+`CONCURRENCY_CONFLICT`。review 恢复后若 dynamic DAG 执行失败并 re-plan，再次进入审核
+也会推进 revision。这样第二个 checkpoint 不会伪装成与第一次审核相同的会话状态。
+
+## 附件和引用生命周期
+
+上传首先进入 content-addressed conversation store：
+
+```text
+<runner workspace>/<runtimeDirectory>/conversations/
+```
+
+模型上下文只得到有界的附件描述与内容引用。执行到不同 `workspacePath` 时，运行时会根据
+checksum 重建需要的资源。后续轮次只恢复具有明确 provenance 的引用；同形状的普通用户
+JSON 不会被当作文件或外置结果。
+
+run 的大值位于：
+
+```text
+<run workspace>/<runtimeDirectory>/results/
+```
+
+resume 需要的历史位于：
+
+```text
+<run workspace>/<runtimeDirectory>/history/
+```
+
+V4 checkpoint 冻结 `runtimeDirectory`，因此 Runner 配置修改不会让旧 run 去错误目录寻找
+资源。
+
+## Host 公共投影
+
+公共 run 与 conversation 响应还会删除：
+
+- target 的 `systemPrompt`
+- plan 的 `extraSystemPrompt`
+- validator profile 正文
+- reasoning token 事件
+
+这些值仍可以在服务端权威 checkpoint 中用于恢复，只是不属于浏览器 API。公共 trace 从
+持久化事件和 checkpoint 计算，不是额外的可写状态。
+
+## 集成约束
+
+- SDK Host 必须持久化完整、原样的 V3 `ConversationState`。
+- 不要把公共 conversation 投影回写成权威历史。
+- 不要手工拼接 item id、run id 或 revision。
+- checkpoint 和 conversation 的保存必须位于可检测并发的事务边界。
+- reasoning 的保留策略可以更严格，但不能把 reasoning 当作下一轮模型输入。
+
+相关文档：[会话、结果、流式与审核](results-streaming-review.md)、
+[0.8 Host 迁移](host-migration-0.8.md)。
