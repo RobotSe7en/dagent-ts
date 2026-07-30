@@ -1,15 +1,15 @@
-# 快速开始
+# Quick Start
 
-本页先用 TypeScript SDK 运行 ToolAgent，再构建一个完全类型化的静态 DAG。
+This page runs a ToolAgent with the TypeScript SDK, then builds a fully typed static DAG.
 
-## 1. 安装
+## 1. Install
 
 ```bash
 pnpm add dagent-ai zod
 export OPENAI_API_KEY=...
 ```
 
-## 2. 配置 Provider
+## 2. Configure a Provider
 
 ```ts
 import { OpenAICompatibleProvider } from 'dagent-ai/providers/openai-compatible';
@@ -23,10 +23,10 @@ const provider = new OpenAICompatibleProvider({
 });
 ```
 
-Provider 实现 `ChatProvider` 接口。兼容端点不支持 streamed usage 时，保持
-`streamIncludeUsage: false`。
+A provider implements `ChatProvider`. Keep `streamIncludeUsage: false` when a compatible endpoint
+does not support streamed usage.
 
-## 3. 定义类型化 Tool
+## 3. Define a Typed Tool
 
 ```ts
 import { tool } from 'dagent-ai';
@@ -53,10 +53,10 @@ const lookupWeather = tool({
 });
 ```
 
-Zod schema 同时提供运行时边界与泛型推导。输入和输出不符合 schema 时，调用会明确
-失败。
+The Zod schemas are both runtime boundaries and sources for generic inference. An invocation fails
+explicitly when its input or output does not match the schema.
 
-## 4. 运行 ToolAgent
+## 4. Run a ToolAgent
 
 ```ts
 import { Runner, defineToolAgent } from 'dagent-ai';
@@ -88,10 +88,10 @@ if (outcome.status === 'completed') {
 }
 ```
 
-`RunOutcome` 是判别联合。运行可能完成、失败、取消或暂停等待审核；处理审核见
-[会话、结果、流式与审核](results-streaming-review.md)。
+`RunOutcome` is a discriminated union. A run can complete, fail, be cancelled, or pause for review.
+See [Conversations, Results, Streaming, and Review](results-streaming-review.md) for review handling.
 
-## 5. 使用流式事件
+## 5. Stream Events
 
 ```ts
 for await (const event of runner.stream(agent, {
@@ -111,9 +111,9 @@ for await (const event of runner.stream(agent, {
 }
 ```
 
-`stream()` 返回 `AsyncIterable<RunEvent>`，不用事件发射器，也无需额外回调注册。
+`stream()` returns `AsyncIterable<RunEvent>`; no event emitter or callback registration is needed.
 
-## 6. 构建静态 DAG
+## 6. Build a Static DAG
 
 ```ts
 import { DagBuilder, defineStaticDag } from 'dagent-ai';
@@ -165,12 +165,13 @@ runner.registerCapability(summarize);
 const result = await runner.run(staticTarget, { graphInput: { city: 'Suzhou' } });
 ```
 
-这里没有字符串模板引用。`ValueRef<T>` 保留 dataflow 类型，`build()` 产生可序列化且经过
-校验的 `DAGSpec`。
+There are no string-template references here. `ValueRef<T>` preserves dataflow types, while
+`build()` produces a validated, serializable `DAGSpec`.
 
-## 接下来读什么
+## Read Next
 
-- 了解三种执行模式：[Agents](agents.md)
-- 掌握完整 builder：[静态 DAG](static-dag.md)
-- 配置 YAML、MCP、Profiles 和 Sandbox：[Runner 和配置](runner-and-configuration.md)
-- 直接运行仓库示例：[examples](../examples/README.md)
+- Choose an execution mode: [Agents](agents.md)
+- Learn the complete builder: [Static DAGs](static-dag.md)
+- Configure YAML, MCP, profiles, and sandboxing:
+  [Runner and Configuration](runner-and-configuration.md)
+- Run repository examples: [examples](../../examples/README.md)

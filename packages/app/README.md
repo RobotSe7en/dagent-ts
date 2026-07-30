@@ -21,9 +21,9 @@ This host is designed as a local single-user application. Add authentication, TL
 and tenant isolation before exposing it to a network.
 
 See
-[installation](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/installation.md),
-[Runner and configuration](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/runner-and-configuration.md),
-[persistence](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/api-backend-persistence.md),
-and [HTTP API](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/http-api.md).
+[installation](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/installation.md),
+[Runner and configuration](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/runner-and-configuration.md),
+[persistence](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/api-backend-persistence.md),
+and [HTTP API](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/http-api.md).
 
 License: Apache-2.0.

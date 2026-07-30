@@ -136,7 +136,7 @@ const runner = await createRunnerFromConfigFile('./runner.yaml', {
 
 ## App YAML
 
-[`examples/dagent.yaml`](../examples/dagent.yaml) 是统一 Host 的起始配置：
+[`examples/dagent.yaml`](../../examples/dagent.yaml) 是统一 Host 的起始配置：
 
 ```yaml
 host: 127.0.0.1

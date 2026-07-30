@@ -4,44 +4,46 @@
 
 **Plan globally. Re-plan locally.**
 
-面向 TypeScript 的类型安全 Agent 与 DAG 运行时。
+A type-safe Agent and DAG runtime for TypeScript.
 
-[文档](docs/README.md) · [快速开始](docs/quick-start.md) ·
-[SDK 参考](docs/typescript-sdk.md) · [迁移说明](docs/migration.md)
+[Documentation](docs/en/README.md) · [简体中文](README.zh-CN.md) ·
+[Quick Start](docs/en/quick-start.md) · [SDK Reference](docs/en/typescript-sdk.md)
 
 </div>
 
 ---
 
-Dagent TypeScript 是 [Dagent](https://github.com/RobotSe7en/dagent) 的 TypeScript
-实现。它保留动态 DAG、静态 DAG、能力目录、人工审核和可恢复执行等核心语义，同时利用
-TypeScript 的判别联合、泛型、Zod schema 与 `AsyncIterable` 重新设计公开 API。
+Dagent TypeScript is the TypeScript implementation of
+[Dagent](https://github.com/RobotSe7en/dagent). It preserves the core semantics of dynamic and
+static DAGs, capability catalogs, human review, and resumable execution while redesigning the
+public API around TypeScript discriminated unions, generics, Zod schemas, and `AsyncIterable`.
 
-这不是 Python 代码的逐行翻译。SDK、持久化 Host 和 Web 工作台位于同一 pnpm
-workspace，共享一套版本化契约；业务代码仍可以只安装无服务端依赖的 `dagent-ai`。
+This is not a line-by-line Python port. The SDK, persistent host, and Web workbench live in one
+pnpm workspace and share versioned contracts, while application code can still install the
+server-independent `dagent-ai` package on its own.
 
-当前版本：**0.8.3**。要求 Node.js 24 或更高版本。
+Current version: **0.8.3**. Node.js 24 or newer is required.
 
-## 核心能力
+## Core Capabilities
 
-1. **三种 Agent 模式** — ToolAgent 直接使用工具；DagAgent 先规划再执行；
-   AutoAgent 根据任务选择执行方式。
-2. **类型化能力** — 输入和输出由 Zod 校验，执行函数获得类型推导、运行上下文、风险与
-   边界元数据。
-3. **Canonical DAG** — 动态规划和 `DagBuilder` 最终都产生同一份纯数据 `DAGSpec`，
-   运行前统一校验。
-4. **受控 Dataflow** — 支持 capability、agent、subgraph、map、bounded loop、条件边与
-   artifact，不执行模型生成的任意代码。
-5. **可恢复审核** — 高风险调用和 DAG 审核生成带 revision、fingerprint 与冻结执行计划的
-   V4 checkpoint。
-6. **有界会话上下文** — V3 `ConversationState` 是唯一权威历史，支持附件、外置结果、
-   token 预算、摘要压缩和推理隔离。
-7. **统一本地应用** — Fastify、SQLite 和 React 工作台提供项目、会话、运行、DAG、
-   Provider、MCP、Skills、能力和产物管理。
+1. **Three Agent modes** — ToolAgent uses tools directly, DagAgent plans before execution, and
+   AutoAgent chooses the execution mode for each request.
+2. **Typed capabilities** — Zod validates inputs and outputs while TypeScript infers execution
+   parameters, results, runtime context, risk, and boundary metadata.
+3. **Canonical DAGs** — Dynamic planning and `DagBuilder` both produce the same data-only
+   `DAGSpec`, validated before execution.
+4. **Controlled dataflow** — Capability, agent, subgraph, map, bounded-loop, conditional-edge, and
+   artifact nodes without executing model-generated code.
+5. **Resumable review** — Risky calls and DAG reviews create V4 checkpoints with revisions,
+   fingerprints, and frozen execution semantics.
+6. **Bounded conversation context** — The V3 `ConversationState` is the sole authoritative history,
+   with attachments, externalized results, token budgets, compaction, and reasoning isolation.
+7. **Unified local application** — Fastify, SQLite, and React provide projects, conversations,
+   runs, DAGs, providers, MCP, Skills, capabilities, and artifact management.
 
-## 快速开始
+## Quick Start
 
-### 使用 SDK
+### Use the SDK
 
 ```bash
 pnpm add dagent-ai zod
@@ -88,11 +90,11 @@ for await (const event of runner.stream(assistant, {
 }
 ```
 
-完整示例见 [examples/basic.ts](examples/basic.ts)。
+See [examples/basic.ts](examples/basic.ts) for the complete example.
 
-### 启动本地应用
+### Start the local application
 
-在本仓库开发：
+From this repository:
 
 ```bash
 corepack enable
@@ -105,12 +107,15 @@ pnpm --filter dagent-ai-app build
 node packages/app/dist/cli.js serve --config ./examples/dagent.yaml
 ```
 
-打开 `http://127.0.0.1:8000`。Host 默认只监听本机地址；配置、环境变量和数据目录说明见
-[安装](docs/installation.md) 与 [Runner 和配置](docs/runner-and-configuration.md)。
+Open `http://127.0.0.1:8000`. The host binds to the loopback interface by default. See
+[Installation](docs/en/installation.md) and
+[Runner and Configuration](docs/en/runner-and-configuration.md) for configuration, environment
+variables, and data-directory behavior.
 
-## 类型化静态 DAG
+## Typed Static DAG
 
-`DagBuilder<TInput, TOutput>` 让输入、节点输出和最终输出在编辑器中保持类型关系：
+`DagBuilder<TInput, TOutput>` preserves the relationship between graph input, node output, and final
+output in the editor:
 
 ```ts
 import { DagBuilder, defineStaticDag, tool } from 'dagent-ai';
@@ -136,15 +141,15 @@ graph.setOutput(normalized.output('value'));
 const target = defineStaticDag(graph.build());
 ```
 
-Builder 只负责安全地构造数据图；`build()` 仍会进行环、依赖、表达式、作用域和 artifact
-校验。详见 [静态 DAG](docs/static-dag.md)。
+The builder only constructs a safe data graph. `build()` still validates cycles, dependencies,
+expressions, execution scopes, and artifacts. See [Static DAGs](docs/en/static-dag.md).
 
-## 架构
+## Architecture
 
 ```mermaid
 flowchart TB
-  Web["React Web 工作台"] -->|REST + resumable SSE| App
-  App["Fastify Host"] --> DB[("Kysely + SQLite")]
+  Web["React Web workbench"] -->|REST + resumable SSE| App
+  App["Fastify host"] --> DB[("Kysely + SQLite")]
   App --> Runner
 
   Runner["dagent-ai Runner"] --> Router["Tool / DAG / Auto"]
@@ -153,7 +158,7 @@ flowchart TB
   Router --> Executor["DagExecutor / ToolAgentRuntime"]
   Planner --> Spec["canonical DAGSpec"]
   Spec --> Executor
-  Executor --> Review["V4 Review Checkpoint"]
+  Executor --> Review["V4 review checkpoint"]
   Executor --> Catalog["CapabilityCatalog"]
 
   Catalog --> TS["TypeScript tools"]
@@ -162,52 +167,58 @@ flowchart TB
   Catalog --> Sandbox["Docker sandbox"]
 ```
 
-- `dagent-ai` 是独立 SDK，不依赖 Fastify、SQLite 或 React。
-- `dagent-ai-app` 是本地 Host，负责持久化、并发控制、资源管理和静态 Web。
-- `@dagent/web` 只通过版本化 HTTP API 访问 Host，不导入运行时内部对象。
-- 跨边界对象进入领域层时只解析一次，内部流程依赖已验证的不可变类型。
+- `dagent-ai` is a standalone SDK with no Fastify, SQLite, or React dependency.
+- `dagent-ai-app` is the local host responsible for persistence, concurrency, resources, and static
+  Web delivery.
+- `@dagent/web` accesses the host only through the versioned HTTP API.
+- Boundary values are parsed once; internal flows depend on validated immutable types.
 
-进一步阅读：[架构说明](docs/architecture.md)。
+Read the [Architecture Guide](docs/en/architecture.md) for the full design.
 
-## 工作区
+## Workspace
 
 ```text
 dagent-ts/
 ├── packages/
-│   ├── sdk/        # dagent-ai：公开 SDK、运行时和契约
-│   └── app/        # dagent-ai-app：CLI、Fastify、SQLite
+│   ├── sdk/        # dagent-ai: public SDK, runtime, and contracts
+│   └── app/        # dagent-ai-app: CLI, Fastify, and SQLite
 ├── apps/
-│   └── web/        # React 工作台
-├── examples/       # 可运行的 TypeScript 与 YAML 示例
-├── docs/           # 使用、设计、Host 和迁移文档
-└── reference/      # 本地上游参考副本，不参与发布
+│   └── web/        # React workbench
+├── examples/       # runnable TypeScript and YAML examples
+├── docs/
+│   ├── en/         # default English documentation
+│   └── zh-CN/      # Simplified Chinese documentation
+└── reference/      # local upstream reference; not published
 ```
 
-## 文档
+## Documentation
 
-| 目标                                    | 文档                                                                                                                     |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 安装并跑通第一个 Agent                  | [安装](docs/installation.md)、[快速开始](docs/quick-start.md)                                                            |
-| 理解 Runner、Agent、DAG 和能力          | [核心概念](docs/concepts.md)                                                                                             |
-| 查询 TypeScript 公开入口                | [TypeScript SDK 参考](docs/typescript-sdk.md)                                                                            |
-| 配置 Provider、MCP、Profiles 和 Sandbox | [Runner 和配置](docs/runner-and-configuration.md)                                                                        |
-| 编写能力、Agent、静态 DAG 与 Skills     | [Capabilities](docs/capabilities.md)、[Agents](docs/agents.md)、[静态 DAG](docs/static-dag.md)、[Skills](docs/skills.md) |
-| 处理会话、流式事件、结果和审核          | [会话、结果、流式与审核](docs/results-streaming-review.md)                                                               |
-| 部署或集成统一 Host                     | [Host 持久化](docs/api-backend-persistence.md)、[HTTP API](docs/http-api.md)                                             |
-| 从旧版升级                              | [0.8 Host 迁移](docs/host-migration-0.8.md)、[迁移说明](docs/migration.md)                                               |
-| 定位常见错误                            | [故障排查](docs/troubleshooting.md)                                                                                      |
+| Goal                                                 | Documentation                                                                                                                           |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Install and run a first Agent                        | [Installation](docs/en/installation.md), [Quick Start](docs/en/quick-start.md)                                                          |
+| Understand Runner, Agents, DAGs, and capabilities    | [Core Concepts](docs/en/concepts.md)                                                                                                    |
+| Find TypeScript public APIs                          | [TypeScript SDK Reference](docs/en/typescript-sdk.md)                                                                                   |
+| Configure providers, MCP, profiles, and sandboxing   | [Runner and Configuration](docs/en/runner-and-configuration.md)                                                                         |
+| Build capabilities, Agents, static DAGs, and Skills  | [Capabilities](docs/en/capabilities.md), [Agents](docs/en/agents.md), [Static DAGs](docs/en/static-dag.md), [Skills](docs/en/skills.md) |
+| Handle conversations, streaming, results, and review | [Conversations, Results, Streaming, and Review](docs/en/results-streaming-review.md)                                                    |
+| Integrate or operate the unified host                | [Host Persistence](docs/en/api-backend-persistence.md), [HTTP API](docs/en/http-api.md)                                                 |
+| Upgrade from an older host                           | [0.8 Host Migration](docs/en/host-migration-0.8.md), [Migration Notes](docs/en/migration.md)                                            |
+| Diagnose common failures                             | [Troubleshooting](docs/en/troubleshooting.md)                                                                                           |
 
-完整入口见 [中文文档](docs/README.md)。
+See the [documentation portal](docs/README.md) for language selection.
 
-## 设计边界
+## Design Boundaries
 
-- 模型可以提出 DAG，但不能提交 JavaScript 代码供运行时执行。
-- Capability 必须通过目录、作用域和 schema 后才能调用；高风险动作仍受审核策略约束。
-- Provider reasoning 可用于内部审计，但不会回放到下一轮上下文，也不会经公共 API 暴露。
-- 文件能力使用词法路径与真实路径双重边界校验；Docker 沙箱默认无网络、只读根文件系统。
-- SSE 事件先持久化后广播，可用 `Last-Event-ID` 从 SQLite 恢复。
+- Models may propose DAGs but cannot submit JavaScript for the runtime to execute.
+- A capability must pass catalog, scope, and schema checks before invocation; review policy still
+  governs risky actions.
+- Provider reasoning may be retained for internal audit, but it is never replayed into later model
+  context or returned by the public API.
+- File capabilities enforce lexical and real-path boundaries. The Docker sandbox defaults to no
+  network and a read-only root filesystem.
+- SSE events are persisted before broadcast and resume from SQLite through `Last-Event-ID`.
 
-## 开发
+## Development
 
 ```bash
 pnpm typecheck
@@ -217,13 +228,14 @@ pnpm build
 pnpm format:check
 ```
 
-仓库采用 pnpm workspace 与 TypeScript project references。发布包使用 ESM；公开类型和实现
-从相同的 `exports` map 输出。
+The repository uses a pnpm workspace and TypeScript project references. Published packages are ESM,
+and runtime values and public types are exposed through the same exports map.
 
-## 版本关系
+## Version Alignment
 
-本实现当前与 Dagent **0.8.3** 的公开运行语义对齐。Python 与 TypeScript 版本不承诺
-逐符号 API 相同：迁移时应对照行为契约，并使用本仓库文档中的 TypeScript 示例。
+This implementation currently tracks the public runtime semantics of Dagent **0.8.3**. Python and
+TypeScript do not promise symbol-for-symbol API compatibility. Migrations should follow behavioral
+contracts and the TypeScript examples in this repository.
 
 ## License
 

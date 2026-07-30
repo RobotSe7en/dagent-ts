@@ -1,6 +1,8 @@
 # Examples
 
-示例要求 Node.js 24，并从 workspace 使用本地 `dagent-ai`。
+Examples require Node.js 24 and use the local `dagent-ai` workspace package.
+
+[简体中文](README.zh-CN.md) · [Documentation](../docs/en/quick-start.md)
 
 ## Basic SDK
 
@@ -12,17 +14,17 @@ pnpm --filter dagent-ai build
 node --experimental-strip-types examples/basic.ts
 ```
 
-[`basic.ts`](basic.ts) 展示：
+[`basic.ts`](basic.ts) demonstrates:
 
-- OpenAI-compatible Provider
-- Zod 类型化 tool
+- the OpenAI-compatible provider
+- a Zod-typed tool
 - ToolAgent
-- `await using` Runner 生命周期
-- `AsyncIterable<RunEvent>` 流式输出
+- the `await using` Runner lifecycle
+- `AsyncIterable<RunEvent>` streaming output
 
-## App configuration
+## App Configuration
 
-[`dagent.yaml`](dagent.yaml) 是 `dagent-ai-app` 的完整起始配置：
+[`dagent.yaml`](dagent.yaml) is a complete starting configuration for `dagent-ai-app`:
 
 ```bash
 pnpm --filter @dagent/web build
@@ -30,11 +32,12 @@ pnpm --filter dagent-ai-app build
 node ../packages/app/dist/cli.js serve --config ./dagent.yaml
 ```
 
-如果从仓库根目录执行，使用：
+From the repository root:
 
 ```bash
 node packages/app/dist/cli.js serve --config ./examples/dagent.yaml
 ```
 
-`skillRoots`、Profile、capability module 与 sandbox Skill 目录相对配置文件解析；
-`dataDirectory` 和 MCP cwd 的相对值由 Host 进程 cwd 解析。
+`skillRoots`, profiles, capability modules, and sandbox Skill directories resolve relative to the
+configuration file. Relative `dataDirectory` and MCP cwd values resolve from the host process
+working directory.

@@ -30,7 +30,7 @@ Public subpaths:
 
 See the repository
 [README](https://github.com/RobotSe7en/dagent-ts#readme),
-[quick start](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/quick-start.md), and
-[TypeScript SDK reference](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/typescript-sdk.md).
+[quick start](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/quick-start.md), and
+[TypeScript SDK reference](https://github.com/RobotSe7en/dagent-ts/blob/main/docs/en/typescript-sdk.md).
 
 License: Apache-2.0.

@@ -10,7 +10,7 @@ Python 迁移时请按行为契约重写 Host 和业务代码，不要逐符号�
 | 0.8.3 | V3 Conversation/Run state，V4 plan/checkpoint，canonical DAG v1 |
 | 0.8.0 | TypeScript 首个完整 0.8 基线                                    |
 
-详细变更见 [CHANGELOG](../CHANGELOG.md)。
+详细变更见 [CHANGELOG](../../CHANGELOG.md)。
 
 ## 0.8.3
 
@@ -85,7 +85,7 @@ prompt 应改为显式引用一次。
 ### 配置
 
 Python YAML 字段不保证与 TS App YAML 一致。以
-[`examples/dagent.yaml`](../examples/dagent.yaml) 为起点，重新填写 Provider、MCP、
+[`examples/dagent.yaml`](../../examples/dagent.yaml) 为起点，重新填写 Provider、MCP、
 Skills、Profiles、Sandbox 和模块。Python module path 不能加载到 TS Host，必须重写为
 发布 ESM 的 capability module 或 MCP server。
 
