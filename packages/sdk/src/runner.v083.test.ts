@@ -1,6 +1,6 @@
 import { access, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -26,22 +26,20 @@ afterEach(async () => {
   );
 });
 
-describe('Runner 0.8.1-0.8.3 contracts', () => {
-  it('requires both workspace and runtimeDirectory at the runtime boundary', () => {
-    expect(
-      () =>
-        new Runner({
-          provider: new MockProvider([]),
-          runtimeDirectory: '.runtime',
-        } as never),
-    ).toThrow();
-    expect(
-      () =>
-        new Runner({
-          provider: new MockProvider([]),
-          workspace: '/tmp/dagent-ts-explicit-paths',
-        } as never),
-    ).toThrow();
+describe('Runner 0.8.1-0.9.0 contracts', () => {
+  it('defaults runtime paths while preserving explicit overrides', async () => {
+    const defaults = new Runner({ provider: new MockProvider([]) });
+    const explicit = new Runner({
+      provider: new MockProvider([]),
+      workspace: '/tmp/dagent-ts-explicit-paths',
+      runtimeDirectory: '.private',
+    });
+
+    expect(defaults.workspacePath).toBe(resolve(homedir(), '.dagent'));
+    expect(defaults.runtimeDirectory).toBe('.runtime');
+    expect(explicit.workspacePath).toBe('/tmp/dagent-ts-explicit-paths');
+    expect(explicit.runtimeDirectory).toBe('.private');
+    await Promise.all([defaults.close(), explicit.close()]);
   });
 
   it.each(['', '.', '..', '../private', 'private/../data', '/private', 'C:/private'])(

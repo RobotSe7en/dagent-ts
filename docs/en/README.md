@@ -22,7 +22,7 @@ Simplified Chinese documentation is available at [docs/zh-CN](../zh-CN/README.md
 | Runner, provider, YAML, MCP, profiles, sandbox            | [Runner and Configuration](runner-and-configuration.md)                      |
 | ToolAgent, DagAgent, AutoAgent                            | [Agents](agents.md)                                                          |
 | Built-ins, TypeScript tools, MCP, boundaries              | [Capabilities](capabilities.md)                                              |
-| `DagBuilder`, references, map, subgraph, loop             | [Static DAGs](static-dag.md)                                                 |
+| `DagBuilder`, condition routing, map, subgraph, loop      | [Static DAGs](static-dag.md)                                                 |
 | Skill roots, managed installs, Skill capabilities         | [Skills](skills.md)                                                          |
 | Multi-turn state, context, streams, large results, review | [Conversations, Results, Streaming, and Review](results-streaming-review.md) |
 | V3 authoritative history and public projections           | [Conversation History and Context](conversation-history.md)                  |

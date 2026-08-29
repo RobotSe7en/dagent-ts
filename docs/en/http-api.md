@@ -38,7 +38,7 @@ GET /api/v1/health
 ```
 
 ```json
-{ "status": "ok", "version": "0.8.3" }
+{ "status": "ok", "version": "0.9.0" }
 ```
 
 ## Projects and Files
@@ -133,6 +133,10 @@ Static DAG:
   }
 }
 ```
+
+`graphInput` may be any JSON value and is checked against the graph's optional Draft 2020-12
+`inputSchema`. Canonical 0.9 graphs may include `kind: "condition"` nodes, `branch` edges, and
+`selectedBranch` in completed node results.
 
 An Agent run accepts at most 32 attachments, each with valid base64 content. Response:
 

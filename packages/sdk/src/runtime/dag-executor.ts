@@ -6,7 +6,6 @@ import type {
   DAGSpec,
   DagNode,
   DagNodeResult,
-  JsonObject,
   JsonValue,
 } from '../contracts/index.js';
 import {
@@ -18,6 +17,7 @@ import {
 import { DagentError, errorMessage, throwIfAborted } from '../errors.js';
 import { evaluateCondition, resolveBinding } from '../domain/value-resolver.js';
 import { assertValidDag } from '../domain/dag-validation.js';
+import { validateDagInput } from '../domain/dag-input-validation.js';
 import {
   externalizeJsonValue,
   normalizeCapabilityResult,
@@ -53,7 +53,7 @@ export class DagExecutor {
   }
 
   public async execute(
-    graphInput: JsonObject,
+    graphInput: JsonValue,
     graphValue: DAGSpec,
     context: RuntimeExecutionContext,
     options: {
@@ -66,6 +66,7 @@ export class DagExecutor {
     } = {},
   ): Promise<DagExecutionResult> {
     const graph = options.validated === true ? graphValue : assertValidDag(graphValue);
+    validateDagInput(graph, graphInput);
     const results: Record<string, DagNodeResult> = { ...options.previousResults };
     const nodeValues = await restoreNodeValues(results, context.workspacePath);
     const artifacts = await ArtifactWorkspace.open({
@@ -111,13 +112,7 @@ export class DagExecutor {
           };
           const shouldSkip =
             incoming.length > 0 &&
-            incoming.every((edge) => {
-              if (results[edge.from]?.status !== 'completed') return true;
-              return (
-                edge.condition !== undefined &&
-                !evaluateCondition(edge.condition, resolutionContext)
-              );
-            });
+            incoming.every((edge) => !isLiveEdge(edge, results, resolutionContext));
           if (shouldSkip) {
             return {
               result: dagNodeResultSchema.parse({
@@ -195,7 +190,7 @@ export class DagExecutor {
 
   async #executeNode(
     node: DagNode,
-    graphInput: JsonObject,
+    graphInput: JsonValue,
     graph: DAGSpec,
     results: Readonly<Record<string, DagNodeResult>>,
     nodeValues: Readonly<Record<string, JsonValue>>,
@@ -220,6 +215,7 @@ export class DagExecutor {
       let valueReference: ContentReference | undefined;
       let references: ContentReference[] = [];
       let content = '';
+      let selectedBranch: string | undefined;
       switch (node.kind) {
         case 'capability': {
           const arguments_ = jsonObjectSchema.parse(
@@ -275,7 +271,7 @@ export class DagExecutor {
           break;
         }
         case 'subgraph': {
-          const nestedInput = jsonObjectSchema.parse(resolveBinding(node.input, resolutionContext));
+          const nestedInput = resolveBinding(node.input, resolutionContext);
           const nested = await this.execute(nestedInput, node.graph, context, { validated: true });
           output = nested.output;
           content = typeof output === 'string' ? output : JSON.stringify(output);
@@ -306,7 +302,7 @@ export class DagExecutor {
           break;
         }
         case 'loop': {
-          let loopInput = jsonObjectSchema.parse(resolveBinding(node.input, resolutionContext));
+          let loopInput = resolveBinding(node.input, resolutionContext);
           let lastOutput: JsonValue = loopInput;
           for (let iteration = 0; iteration < node.maxIterations; iteration += 1) {
             const nested = await this.execute(loopInput, node.graph, context, {
@@ -327,10 +323,22 @@ export class DagExecutor {
             if (until) {
               break;
             }
-            loopInput = isJsonObject(lastOutput) ? lastOutput : { value: lastOutput };
+            loopInput = lastOutput;
           }
           output = lastOutput;
           content = typeof output === 'string' ? output : JSON.stringify(output);
+          break;
+        }
+        case 'condition': {
+          selectedBranch = node.defaultBranch;
+          for (const conditionCase of node.cases) {
+            if (evaluateCondition(conditionCase.when, resolutionContext)) {
+              selectedBranch = conditionCase.branch;
+              break;
+            }
+          }
+          output = { branch: selectedBranch };
+          content = JSON.stringify(output);
           break;
         }
       }
@@ -356,6 +364,7 @@ export class DagExecutor {
           ...(valueReference === undefined ? {} : { valueReference }),
           references,
           content,
+          ...(selectedBranch === undefined ? {} : { selectedBranch }),
           startedAt,
           completedAt: nowTimestamp(),
         }),
@@ -377,6 +386,17 @@ export class DagExecutor {
 }
 
 type DagEdge = DAGSpec['edges'][number];
+
+function isLiveEdge(
+  edge: DagEdge,
+  results: Readonly<Record<string, DagNodeResult>>,
+  context: Parameters<typeof evaluateCondition>[1],
+): boolean {
+  const source = results[edge.from];
+  if (source?.status !== 'completed') return false;
+  if (edge.branch !== undefined) return source.selectedBranch === edge.branch;
+  return edge.condition === undefined || evaluateCondition(edge.condition, context);
+}
 
 function predecessorEdges(graph: DAGSpec): ReadonlyMap<string, readonly DagEdge[]> {
   const values = new Map<string, DagEdge[]>();
@@ -443,8 +463,4 @@ async function mapWithConcurrency<TInput, TOutput>(
   });
   await Promise.all(workers);
   return output;
-}
-
-function isJsonObject(value: JsonValue): value is JsonObject {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

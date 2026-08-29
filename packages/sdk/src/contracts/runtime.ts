@@ -4,7 +4,6 @@ import { sha256 } from '../internal/stable-json.js';
 import {
   checkpointSchemaVersionSchema,
   extraSystemPromptSchema,
-  jsonObjectSchema,
   jsonValueSchema,
   reviewIdSchema,
   runIdSchema,
@@ -80,7 +79,7 @@ export const runStateSchema = z
     conversation: conversationStateSchema.optional(),
     contextUsage: z.array(contextUsageSchema).readonly().default([]),
     validations: z.array(validationRecordSchema).readonly().default([]),
-    graphInput: jsonObjectSchema.default({}),
+    graphInput: jsonValueSchema.default({}),
     graph: dagSpecSchema.optional(),
     nodeResults: z.record(z.string(), dagNodeResultSchema).default({}),
     artifactStates: artifactStatesSchema.default({}),

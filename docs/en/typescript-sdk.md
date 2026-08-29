@@ -66,9 +66,9 @@ runner.checkpoint(runId): RunCheckpoint | undefined
 runner.close(): Promise<void>
 ```
 
-Runner implements `AsyncDisposable`, so Node.js 24 supports `await using`. `workspace` and
-`runtimeDirectory` are required host decisions; the SDK does not silently choose a hidden directory
-under the current working directory.
+Runner implements `AsyncDisposable`, so Node.js 24 supports `await using`. It defaults to
+`workspace=~/.dagent` and `runtimeDirectory=.runtime`; hosts that own persistence should continue
+passing both explicitly.
 
 ## Agent Factories
 
@@ -127,10 +127,14 @@ builder.agent(agentId, prompt, options)
 builder.subgraph(graph, input, options)
 builder.map(items, graph, options)
 builder.loop(graph, input, until, options)
-builder.addEdge(from, to, condition?)
+builder.condition(cases, defaultBranch, options)
+builder.addEdge(from, to, conditionOrOptions?)
 builder.setOutput(value)
 builder.build()
 ```
+
+`allOf(...)`, `anyOf(...)`, and `notCondition(...)` compose reusable conditions. Branch edge
+options use `{ branch }`; ordinary gates remain a direct condition or `{ condition }`.
 
 `NodeRef<T>.output()` and `ValueRef<T>.at()` preserve type relationships. Map and loop child graphs
 must use the matching `executionScope` before calling `item()`. Only loop scope supports
@@ -190,6 +194,6 @@ properties or configure the corresponding values explicitly in Runner options.
 
 ## Version Notes
 
-0.8.3 uses V3 `ConversationState`/`RunState` and V4
+0.9.0 uses V3 `ConversationState`/`RunState` and V4
 `ResolvedRunPlan`/`RunCheckpoint`. A checkpoint is a strict resumption contract; do not hand-write,
 trim, or heuristically migrate it across versions.

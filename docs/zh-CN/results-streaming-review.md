@@ -69,6 +69,15 @@ map、loop 以及 resume 只有在 provenance 明确时才恢复值。文件缺�
 
 这些私有目录按需创建。没有附件、大结果或恢复历史的运行不会留下空目录树。
 
+## 结构化 DAG 结果
+
+静态 DAG 完成后，会把解析后的 `DAGSpec.output` 原样写入 `RunOutcome.output`，无论它是
+scalar、list 还是 object。同一个值也会持久化到 `RunState.output` 与 V4 checkpoint。
+非静态运行继续通过同一个 outcome 字段提供最终回答。
+
+Condition 节点结果包含 `{ branch: string }`，并单独记录 `selectedBranch`，使 checkpoint
+consumer 和 run inspector 能说明为何执行了某一条互斥路径。
+
 ## 流式事件
 
 ```ts

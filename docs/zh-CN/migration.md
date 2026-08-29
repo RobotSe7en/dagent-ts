@@ -5,12 +5,47 @@ Python 迁移时请按行为契约重写 Host 和业务代码，不要逐符号�
 
 ## 当前发布线
 
-| 版本  | 契约                                                            |
-| ----- | --------------------------------------------------------------- |
-| 0.8.3 | V3 Conversation/Run state，V4 plan/checkpoint，canonical DAG v1 |
-| 0.8.0 | TypeScript 首个完整 0.8 基线                                    |
+| 版本  | 契约                                                         |
+| ----- | ------------------------------------------------------------ |
+| 0.9.0 | 带 condition node、branch edge 与输入校验的 canonical DAG v1 |
+| 0.8.3 | V3 Conversation/Run state 与 V4 plan/checkpoint              |
+| 0.8.0 | TypeScript 首个完整 0.8 基线                                 |
 
 详细变更见 [CHANGELOG](../../CHANGELOG.md)。
+
+## 0.9.0
+
+### Condition 路由
+
+`DagNode` 新增带有序 `cases` 和必填 `defaultBranch` 的 `kind: "condition"` 变体。
+`DagEdge.branch` 把选中的 branch 连接到一个或多个下游节点；`DagNodeResult.selectedBranch`
+持久化该决策。Host 和穷举 decoder 在加载 0.9 DAG/checkpoint 前必须接受这些新增/可选变体。
+
+Builder 使用 `DagBuilder.condition(...)` 与 `addEdge(..., { branch })`；`allOf`、`anyOf`
+和 `notCondition` 负责组合条件。普通 `condition` edge 继续作为独立 gate：branch edge
+必须来自 condition node，同一条 edge 不能同时声明两种形式。
+
+### 静态输入与输出
+
+静态 `graphInput` 现在接受任意 `JsonValue`。声明的输入 schema 必须是有效且
+self-contained 的 JSON Schema Draft 2020-12 文档。Runner 会在创建 workspace 前校验根
+输入，并在调用子 capability 前校验 resolved subgraph/loop input。
+`DagInputValidationError` 暴露实例 `path` 与 `schemaPath`。
+
+精确的静态结构化输出继续通过 `RunOutcome.output`、V3 run state 和 V4 checkpoint
+提供；saved-DAG 数据库不需要迁移。
+
+### Runner 默认值与 Profile
+
+`workspace` 与 `runtimeDirectory` 现在可选，默认值分别为 `~/.dagent` 和 `.runtime`。
+负责持久化的 Host 应继续显式传值。内置 `conversation` profile 现在只负责直接回答和
+有界 tool selection；DAG planning 仍由 DagAgent 负责。
+
+### 兼容性
+
+现有 capability、agent、subgraph、map、loop 和普通条件边 graph 行为保持不变。
+Canonical schema version 仍为 1，conversation/checkpoint 仍为 V3/V4。破坏面仅限于不接受
+0.9 新变体的穷举 node/edge/result decoder。
 
 ## 0.8.3
 
@@ -65,19 +100,21 @@ fingerprint 或删除新字段。V4 仍使用 V3 conversation/run state，这是
 内容、value 和 artifact references 在模型投影中有界且去重。依赖旧版重复注入行为的
 prompt 应改为显式引用一次。
 
-## 从 Python Dagent 0.8.3 迁移
+## 从 Python Dagent 0.9.0 迁移
 
 ### 包与语言边界
 
-| Python 概念        | TypeScript 入口                                                |
-| ------------------ | -------------------------------------------------------------- |
-| Runner             | `new Runner(options)`                                          |
-| function tool      | `tool({ input: zod, output: zod, execute })`                   |
-| Agent config       | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
-| static DAG builder | `DagBuilder<TInput, TOutput>`                                  |
-| async event stream | `for await (const event of runner.stream(...))`                |
-| Pydantic boundary  | Zod schema                                                     |
-| context manager    | `await using` / `try...finally`                                |
+| Python 概念                  | TypeScript 入口                                                |
+| ---------------------------- | -------------------------------------------------------------- |
+| Runner                       | `new Runner(options)`                                          |
+| function tool                | `tool({ input: zod, output: zod, execute })`                   |
+| Agent config                 | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
+| static DAG builder           | `DagBuilder<TInput, TOutput>`                                  |
+| `ConditionNode`              | `builder.condition(...)` 与 `{ branch }` edge options          |
+| `all_of` / `any_of` / `not_` | `allOf` / `anyOf` / `notCondition`                             |
+| async event stream           | `for await (const event of runner.stream(...))`                |
+| Pydantic boundary            | Zod schema                                                     |
+| context manager              | `await using` / `try...finally`                                |
 
 不要把 Python class hierarchy 照搬成 TypeScript class。Agent 和领域契约应保持不可变数据，
 可变生命周期集中在 Runner、Manager、Store 和 Host service。

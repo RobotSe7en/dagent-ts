@@ -8,11 +8,11 @@ import type {
   ValueExpression,
 } from '../contracts/dag.js';
 import { valueExpressionSchema } from '../contracts/dag.js';
-import type { JsonObject, JsonValue } from '../contracts/common.js';
+import type { JsonValue } from '../contracts/common.js';
 import { DagentError } from '../errors.js';
 
 export type ValueResolutionContext = {
-  readonly graphInput: JsonObject;
+  readonly graphInput: JsonValue;
   readonly nodeResults: Readonly<Record<string, DagNodeResult>>;
   readonly nodeValues?: Readonly<Record<string, JsonValue>>;
   readonly graph: DAGSpec;
@@ -46,6 +46,15 @@ export function evaluateCondition(
   condition: DagCondition,
   context: ValueResolutionContext,
 ): boolean {
+  if (condition.operator === 'all') {
+    return condition.conditions.every((child) => evaluateCondition(child, context));
+  }
+  if (condition.operator === 'any') {
+    return condition.conditions.some((child) => evaluateCondition(child, context));
+  }
+  if (condition.operator === 'not') {
+    return !evaluateCondition(condition.condition, context);
+  }
   if (condition.operator === 'truthy') return Boolean(resolveBinding(condition.value, context));
   if (condition.operator === 'falsy') return !resolveBinding(condition.value, context);
   if (condition.operator === 'in') {

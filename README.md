@@ -22,7 +22,7 @@ This is not a line-by-line Python port. The SDK, persistent host, and Web workbe
 pnpm workspace and share versioned contracts, while application code can still install the
 server-independent `dagent-ai` package on its own.
 
-Current version: **0.8.3**. Node.js 24 or newer is required.
+Current version: **0.9.0**. Node.js 24 or newer is required.
 
 ## Core Capabilities
 
@@ -32,8 +32,8 @@ Current version: **0.8.3**. Node.js 24 or newer is required.
    parameters, results, runtime context, risk, and boundary metadata.
 3. **Canonical DAGs** — Dynamic planning and `DagBuilder` both produce the same data-only
    `DAGSpec`, validated before execution.
-4. **Controlled dataflow** — Capability, agent, subgraph, map, bounded-loop, conditional-edge, and
-   artifact nodes without executing model-generated code.
+4. **Controlled dataflow** — Capability, agent, first-class condition routing, subgraph, map,
+   bounded loop, ordinary edge gates, and artifacts without executing model-generated code.
 5. **Resumable review** — Risky calls and DAG reviews create V4 checkpoints with revisions,
    fingerprints, and frozen execution semantics.
 6. **Bounded conversation context** — The V3 `ConversationState` is the sole authoritative history,
@@ -233,7 +233,7 @@ and runtime values and public types are exposed through the same exports map.
 
 ## Version Alignment
 
-This implementation currently tracks the public runtime semantics of Dagent **0.8.3**. Python and
+This implementation currently tracks the public runtime semantics of Dagent **0.9.0**. Python and
 TypeScript do not promise symbol-for-symbol API compatibility. Migrations should follow behavioral
 contracts and the TypeScript examples in this repository.
 

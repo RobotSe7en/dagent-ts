@@ -3,7 +3,7 @@ import type {
   ConversationState,
   DagAgent,
   DAGSpec,
-  JsonObject,
+  JsonValue,
   ReviewDecision,
   RunEvent,
   RunId,
@@ -350,7 +350,7 @@ export const api = {
             readonly contentBase64: string;
           }[];
         }
-      | { readonly graphInput: JsonObject };
+      | { readonly graphInput: JsonValue };
   }) =>
     request<{ readonly runId: RunId }>('/runs', {
       method: 'POST',

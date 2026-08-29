@@ -35,6 +35,8 @@ const target = defineStaticDag(graph.build());
 const outcome = await runner.run(target, {
   graphInput: { text: 'hello' },
 });
+
+if (outcome.status === 'completed') console.log(outcome.output);
 ```
 
 确保 graph 使用的 capability 已注册到同一个 Runner。
@@ -81,6 +83,49 @@ graph.addEdge(first, conditional, {
 
 条件支持 `truthy`、`falsy`、`eq`、`neq`、`gt`、`gte`、`lt`、`lte` 和 `in`。节点
 dataflow 引用仍必须由结构依赖支配；条件不是绕过依赖检查的方式。
+
+有序且互斥的 IF/ELIF/ELSE 路由应使用 condition 节点。第一个匹配 case 胜出；如果没有
+匹配项，则选择必填的默认 branch：
+
+```ts
+import { allOf, anyOf, notCondition } from 'dagent-ai';
+
+const passing = {
+  operator: 'gte' as const,
+  left: scored.output('score').toBinding(),
+  right: 0.8,
+};
+const route = graph.condition(
+  [
+    {
+      branch: 'publish',
+      when: allOf(
+        passing,
+        anyOf(passing, {
+          operator: 'eq',
+          left: scored.output('score').toBinding(),
+          right: 1,
+        }),
+        notCondition({
+          operator: 'lt',
+          left: scored.output('score').toBinding(),
+          right: 0.5,
+        }),
+      ),
+    },
+  ],
+  'revise',
+  { id: 'route', after: [scored] },
+);
+
+graph.addEdge(route, publish, { branch: 'publish' });
+graph.addEdge(route, revise, { branch: 'revise' });
+```
+
+选中的 branch 可以 fan out 到多个 target，也可以没有出边而正常结束。Condition 节点的
+每条出边都必须声明已有 branch；其他节点不能产生 branch edge；同一条 edge 不能同时设置
+`branch` 与 `condition`。执行时 condition 节点输出 `{ branch: string }`，并在节点结果的
+`selectedBranch` 中记录同一个值。
 
 ## Agent 节点
 
@@ -191,3 +236,9 @@ import { assertValidDag, validateDag, validateDagInScope } from 'dagent-ai';
 
 `validateDag()` 返回 issues，适合编辑器；`assertValidDag()` 失败时抛出 `DagentError`，
 适合执行边界。Builder 的 `build()` 已自动进行 scope-aware 校验。
+
+每个已声明的 `inputSchema` 都会作为有效且 self-contained 的 JSON Schema Draft 2020-12
+文档校验。`validateDagInput(graphOrSchema, value)` 可以校验任意 JSON value，不做 coercion，
+也不应用 default。Runner 会在创建运行 workspace 或发送 event 前完成校验；subgraph 和
+loop 的每次迭代也会在调用子 capability 前校验 resolved input。失败会抛出带 `path` 与
+`schemaPath` 的 `DagInputValidationError`。

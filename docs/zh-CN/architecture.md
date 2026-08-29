@@ -98,7 +98,8 @@ flowchart LR
 复用；失败节点允许替换或重跑。审核使用 checkpoint fingerprint，过期 revision 会被
 拒绝。审核后的执行若失败并重新规划到下一个审核边界，权威会话 revision 会严格推进。
 
-SDK 要求 Host 显式传入 `workspace` 和安全相对的 `runtimeDirectory`。会话资源位于
+SDK 默认使用 `workspace=~/.dagent` 与安全相对的 `runtimeDirectory=.runtime`；负责
+持久化的 Host 显式传入两者。会话资源位于
 `<workspace>/<runtimeDirectory>/conversations`；外置结果和恢复历史分别位于每次运行
 工作区的 `<runtimeDirectory>/results` 与 `<runtimeDirectory>/history`，且按需创建。
 

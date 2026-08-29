@@ -60,11 +60,7 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 
 export const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
 
-export const jsonSchemaSchema = z
-  .record(z.string(), z.unknown())
-  .refine((value) => typeof value['type'] === 'string' || '$ref' in value || 'anyOf' in value, {
-    message: 'Expected a JSON Schema object.',
-  });
+export const jsonSchemaSchema = z.record(z.string(), z.unknown());
 export type JsonSchema = z.infer<typeof jsonSchemaSchema>;
 
 export function nowTimestamp(): string {

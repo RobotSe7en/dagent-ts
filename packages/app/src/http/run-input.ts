@@ -20,7 +20,7 @@ export const agentRunInputSchema = z
 
 export const staticRunInputSchema = z
   .object({
-    graphInput: z.record(z.string(), jsonValueSchema).default({}),
+    graphInput: jsonValueSchema.default({}),
     artifactUploads: z.record(z.string().min(1), z.array(uploadSchema)).optional(),
   })
   .strict();

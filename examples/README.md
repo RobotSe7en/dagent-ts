@@ -22,6 +22,16 @@ node --experimental-strip-types examples/basic.ts
 - the `await using` Runner lifecycle
 - `AsyncIterable<RunEvent>` streaming output
 
+## Condition Routing
+
+```bash
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/condition-routing.ts
+```
+
+[`condition-routing.ts`](condition-routing.ts) is an offline static-DAG example with ordered cases,
+composable conditions, mutually exclusive branch edges, and exact structured output.
+
 ## App Configuration
 
 [`dagent.yaml`](dagent.yaml) is a complete starting configuration for `dagent-ai-app`:

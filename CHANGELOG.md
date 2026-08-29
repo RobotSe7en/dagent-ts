@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0
+
+- Added first-class condition nodes, ordered cases, exclusive branch edges, branch fan-out, and
+  persisted `selectedBranch` results across static, dynamically planned, saved, and resumed DAGs.
+- Added composable `allOf`, `anyOf`, and `notCondition` predicates while retaining ordinary edge
+  conditions for independent gates.
+- Added self-contained JSON Schema Draft 2020-12 validation for DAG input schemas and typed graph
+  input errors before workspace creation or execution; nested subgraphs and every loop iteration
+  validate their resolved input as well.
+- Generalized static graph input from object-only values to any JSON value and retained exact
+  structured static output through `RunOutcome.output`, run state, checkpoints, and host APIs.
+- Defaulted SDK Runner storage to `~/.dagent` and `.runtime` when the host does not select explicit
+  paths, and corrected the built-in conversation profile to contain only bounded tool-loop
+  guidance.
+- Updated the Fastify host, React DAG projection, bilingual documentation, examples, and version
+  metadata for the 0.9 contract.
+
 ## 0.8.3
 
 - Added a validated runner-level `extraSystemPrompt` that is frozen into V4 run plans and applied

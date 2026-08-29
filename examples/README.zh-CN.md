@@ -22,6 +22,16 @@ node --experimental-strip-types examples/basic.ts
 - `await using` Runner 生命周期
 - `AsyncIterable<RunEvent>` 流式输出
 
+## Condition 路由
+
+```bash
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/condition-routing.ts
+```
+
+[`condition-routing.ts`](condition-routing.ts) 是离线静态 DAG 示例，展示有序 cases、组合
+条件、互斥 branch edges 与精确结构化输出。
+
 ## App configuration
 
 [`dagent.yaml`](dagent.yaml) 是 `dagent-ai-app` 的完整起始配置：

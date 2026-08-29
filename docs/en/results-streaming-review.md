@@ -75,6 +75,15 @@ files, changed checksums, or references escaping the runtime directory fail.
 Private directories are created lazily. A run with no attachments, large results, or restored
 history leaves no empty directory tree.
 
+## Structured DAG Results
+
+A completed static DAG returns its exact resolved `DAGSpec.output` as `RunOutcome.output`, whether
+the value is a scalar, list, or object. The same value is persisted in `RunState.output` and the V4
+checkpoint. Non-static runs continue to expose their final answer through the same outcome field.
+
+Condition node results contain `{ branch: string }` and record `selectedBranch` separately, so
+checkpoint consumers and run inspectors can explain why one mutually exclusive route executed.
+
 ## Streaming Events
 
 ```ts

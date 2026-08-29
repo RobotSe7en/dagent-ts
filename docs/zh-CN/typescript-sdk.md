@@ -66,8 +66,9 @@ runner.checkpoint(runId): RunCheckpoint | undefined
 runner.close(): Promise<void>
 ```
 
-Runner 实现 `AsyncDisposable`，Node.js 24 可使用 `await using`。`workspace` 和
-`runtimeDirectory` 是必填 host 选择；不要让 SDK 默认为当前目录中的隐藏路径。
+Runner 实现 `AsyncDisposable`，Node.js 24 可使用 `await using`。默认值是
+`workspace=~/.dagent` 与 `runtimeDirectory=.runtime`；负责持久化的 Host 仍应显式传入
+两者。
 
 ## Agent factories
 
@@ -125,10 +126,14 @@ builder.agent(agentId, prompt, options)
 builder.subgraph(graph, input, options)
 builder.map(items, graph, options)
 builder.loop(graph, input, until, options)
-builder.addEdge(from, to, condition?)
+builder.condition(cases, defaultBranch, options)
+builder.addEdge(from, to, conditionOrOptions?)
 builder.setOutput(value)
 builder.build()
 ```
+
+`allOf(...)`、`anyOf(...)` 与 `notCondition(...)` 用于组合可复用条件。Branch edge options
+使用 `{ branch }`；普通 gate 仍可直接传 condition 或 `{ condition }`。
 
 `NodeRef<T>.output()` 与 `ValueRef<T>.at()` 保留类型关系。map/loop 子图必须使用对应
 `executionScope` 才能调用 `item()`；只有 loop scope 可以调用 `iteration()`。
@@ -185,6 +190,6 @@ Provider adapter 只负责传输和模型协议。对话压缩、能力 scope、
 
 ## 版本说明
 
-0.8.3 使用 V3 `ConversationState`/`RunState` 与 V4
+0.9.0 使用 V3 `ConversationState`/`RunState` 与 V4
 `ResolvedRunPlan`/`RunCheckpoint`。checkpoint 是严格恢复契约，不应手写、裁剪或跨版本
 猜测迁移。

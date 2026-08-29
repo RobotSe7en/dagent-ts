@@ -36,7 +36,7 @@ GET /api/v1/health
 ```
 
 ```json
-{ "status": "ok", "version": "0.8.3" }
+{ "status": "ok", "version": "0.9.0" }
 ```
 
 ## 项目与文件
@@ -131,6 +131,10 @@ Agent：
   }
 }
 ```
+
+`graphInput` 可以是任意 JSON value，并会按 graph 可选的 Draft 2020-12 `inputSchema`
+校验。Canonical 0.9 graph 可以包含 `kind: "condition"` 节点、`branch` edge，以及完成
+节点结果中的 `selectedBranch`。
 
 上传最多 32 个 Agent attachments，内容必须是合法 base64。返回：
 

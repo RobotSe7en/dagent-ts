@@ -105,7 +105,8 @@ and reused; failed nodes may be replaced or rerun. Review uses checkpoint finger
 revisions are rejected. If reviewed execution fails and re-plans to another review boundary, the
 authoritative conversation revision advances.
 
-The SDK requires the host to provide `workspace` and a safe relative `runtimeDirectory`.
+The SDK defaults `workspace` to `~/.dagent` and `runtimeDirectory` to the safe relative `.runtime`;
+storage-owning hosts provide both explicitly.
 Conversation resources live under `<workspace>/<runtimeDirectory>/conversations`; externalized
 results and restored history live under each run workspace's `<runtimeDirectory>/results` and
 `<runtimeDirectory>/history`, created lazily.

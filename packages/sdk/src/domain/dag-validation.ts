@@ -9,6 +9,7 @@ import type {
 import { dagSpecSchema, valueExpressionSchema } from '../contracts/dag.js';
 import { DagentError, errorMessage } from '../errors.js';
 import { validateArtifactPath } from './artifact-path.js';
+import { validateInputSchema } from './dag-input-validation.js';
 
 export type DagValidationIssue = {
   readonly code:
@@ -62,6 +63,17 @@ function validateDagInEnvironment(
 
   const graph = parsed.data;
   const issues: DagValidationIssue[] = [];
+  if (graph.inputSchema !== undefined) {
+    try {
+      validateInputSchema(graph.inputSchema);
+    } catch (error) {
+      issues.push({
+        code: 'invalid-schema',
+        message: errorMessage(error),
+        path: 'inputSchema',
+      });
+    }
+  }
   const nodeIds = new Set<string>();
   for (const [index, node] of graph.nodes.entries()) {
     if (nodeIds.has(node.id)) {
@@ -72,6 +84,33 @@ function validateDagInEnvironment(
       });
     }
     nodeIds.add(node.id);
+  }
+
+  const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const conditionBranches = new Map<string, ReadonlySet<string>>();
+  for (const [index, node] of graph.nodes.entries()) {
+    if (node.kind !== 'condition') continue;
+    const caseBranches = node.cases.map(({ branch }) => branch);
+    const duplicates = [
+      ...new Set(
+        caseBranches.filter((branch, branchIndex) => caseBranches.indexOf(branch) !== branchIndex),
+      ),
+    ].sort();
+    if (duplicates.length > 0) {
+      issues.push({
+        code: 'invalid-schema',
+        message: `Condition node '${node.id}' has duplicate case branches: ${duplicates.join(', ')}.`,
+        path: `nodes.${index}.cases`,
+      });
+    }
+    if (caseBranches.includes(node.defaultBranch)) {
+      issues.push({
+        code: 'invalid-schema',
+        message: `Condition node '${node.id}' default branch '${node.defaultBranch}' duplicates a case branch.`,
+        path: `nodes.${index}.defaultBranch`,
+      });
+    }
+    conditionBranches.set(node.id, new Set([...caseBranches, node.defaultBranch]));
   }
 
   const artifactIds = new Set(Object.keys(graph.artifacts));
@@ -97,7 +136,7 @@ function validateDagInEnvironment(
   }
 
   for (const [index, edge] of graph.edges.entries()) {
-    validateEdge(edge, index, nodeIds, issues);
+    validateEdge(edge, index, nodesById, conditionBranches, issues);
   }
 
   const predecessors = buildPredecessors(graph.edges);
@@ -196,17 +235,19 @@ export function assertValidDagInScope(input: unknown, scope: DagValidationScope)
 function validateEdge(
   edge: DagEdge,
   index: number,
-  nodeIds: ReadonlySet<string>,
+  nodesById: ReadonlyMap<string, DagNode>,
+  conditionBranches: ReadonlyMap<string, ReadonlySet<string>>,
   issues: DagValidationIssue[],
 ): void {
-  if (!nodeIds.has(edge.from)) {
+  const source = nodesById.get(edge.from);
+  if (source === undefined) {
     issues.push({
       code: 'invalid-edge',
       message: `Edge source '${edge.from}' does not exist.`,
       path: `edges.${index}.from`,
     });
   }
-  if (!nodeIds.has(edge.to)) {
+  if (!nodesById.has(edge.to)) {
     issues.push({
       code: 'invalid-edge',
       message: `Edge target '${edge.to}' does not exist.`,
@@ -218,6 +259,34 @@ function validateEdge(
       code: 'cycle',
       message: `Node '${edge.from}' cannot depend on itself.`,
       path: `edges.${index}`,
+    });
+  }
+  if (edge.condition !== undefined && edge.branch !== undefined) {
+    issues.push({
+      code: 'invalid-edge',
+      message: `Edge '${edge.from}->${edge.to}' cannot declare both condition and branch.`,
+      path: `edges.${index}`,
+    });
+  }
+  if (source?.kind === 'condition') {
+    if (edge.branch === undefined) {
+      issues.push({
+        code: 'invalid-edge',
+        message: `Condition node '${edge.from}' outgoing edge to '${edge.to}' must declare a branch.`,
+        path: `edges.${index}.branch`,
+      });
+    } else if (!(conditionBranches.get(edge.from)?.has(edge.branch) ?? false)) {
+      issues.push({
+        code: 'invalid-edge',
+        message: `Condition node '${edge.from}' outgoing edge to '${edge.to}' references unknown branch '${edge.branch}'.`,
+        path: `edges.${index}.branch`,
+      });
+    }
+  } else if (edge.branch !== undefined) {
+    issues.push({
+      code: 'invalid-edge',
+      message: `Edge '${edge.from}->${edge.to}' declares branch '${edge.branch}', but its source is not a condition node.`,
+      path: `edges.${index}.branch`,
     });
   }
 }
@@ -326,11 +395,25 @@ function validateNodeReferences(
         issues,
       );
       return;
+    case 'condition':
+      for (const [caseIndex, conditionCase] of node.cases.entries()) {
+        validateConditionReferences(
+          conditionCase.when,
+          `${path}.cases.${caseIndex}.when`,
+          node.id,
+          predecessors,
+          nodeIds,
+          artifactIds,
+          environment,
+          issues,
+        );
+      }
+      return;
   }
 }
 
 function validateNestedGraph(node: DagNode, index: number, issues: DagValidationIssue[]): void {
-  if (node.kind === 'capability' || node.kind === 'agent') return;
+  if (node.kind === 'capability' || node.kind === 'agent' || node.kind === 'condition') return;
   const result = validateDagInEnvironment(node.graph, {
     allowItem: node.kind === 'map' || node.kind === 'loop',
     allowIteration: node.kind === 'loop',
@@ -352,7 +435,31 @@ function validateConditionReferences(
   environment: ValidationEnvironment,
   issues: DagValidationIssue[],
 ): void {
-  if (condition.operator === 'truthy' || condition.operator === 'falsy') {
+  if (condition.operator === 'all' || condition.operator === 'any') {
+    for (const [index, child] of condition.conditions.entries()) {
+      validateConditionReferences(
+        child,
+        `${path}.conditions.${index}`,
+        currentNodeId,
+        predecessors,
+        nodeIds,
+        artifactIds,
+        environment,
+        issues,
+      );
+    }
+  } else if (condition.operator === 'not') {
+    validateConditionReferences(
+      condition.condition,
+      `${path}.condition`,
+      currentNodeId,
+      predecessors,
+      nodeIds,
+      artifactIds,
+      environment,
+      issues,
+    );
+  } else if (condition.operator === 'truthy' || condition.operator === 'falsy') {
     validateBindingReferences(
       condition.value,
       `${path}.value`,

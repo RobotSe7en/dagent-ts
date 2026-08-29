@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { z } from 'zod';
 
@@ -43,7 +44,6 @@ import type {
   DagAgent,
   ExecutionLimits,
   JsonValue,
-  JsonObject,
   ResolvedRunPlan,
   ResultStoragePolicy,
   ReviewDecision,
@@ -58,6 +58,7 @@ import type {
   ValidationRecord,
 } from './contracts/index.js';
 import { assertValidDag } from './domain/dag-validation.js';
+import { validateDagInput } from './domain/dag-input-validation.js';
 import { reusableNodeResults } from './domain/dag-transition.js';
 import { DagentError, errorMessage } from './errors.js';
 import { sha256 } from './internal/stable-json.js';
@@ -91,8 +92,8 @@ export type RunnerOptions = {
   readonly provider: ChatProvider;
   readonly capabilities?: readonly CapabilityBinding[];
   readonly agents?: readonly (ToolAgent | DagAgent | AutoAgent)[];
-  readonly workspace: string;
-  readonly runtimeDirectory: string;
+  readonly workspace?: string;
+  readonly runtimeDirectory?: string;
   readonly extraSystemPrompt?: string;
   readonly limits?: Partial<ExecutionLimits>;
   readonly context?: Partial<ContextPolicy>;
@@ -115,7 +116,7 @@ export type AgentRunInput = {
 };
 
 export type StaticDagRunInput = {
-  readonly graphInput?: JsonObject;
+  readonly graphInput?: JsonValue;
   readonly artifactUploads?: Readonly<Record<string, readonly ArtifactUpload[]>>;
 };
 
@@ -161,8 +162,8 @@ export class Runner implements AsyncDisposable {
     this.mcp = new McpManager();
     this.catalog = new CapabilityCatalog(createSkillCapabilities(this.skills));
     for (const binding of options.capabilities ?? []) this.catalog.replace(binding);
-    this.#workspace = resolve(options.workspace);
-    this.#runtimeDirectory = runtimeDirectorySchema.parse(options.runtimeDirectory);
+    this.#workspace = resolve(options.workspace ?? join(homedir(), '.dagent'));
+    this.#runtimeDirectory = runtimeDirectorySchema.parse(options.runtimeDirectory ?? '.runtime');
     this.#extraSystemPrompt =
       options.extraSystemPrompt === undefined
         ? undefined
@@ -533,6 +534,10 @@ export class Runner implements AsyncDisposable {
     this.#assertOpen();
     const target = runTargetSchema.parse(targetValue);
     if (isAgentInput(input)) assertAgentHistory(input);
+    if (target.kind === 'static-dag') {
+      assertValidDag(target.graph);
+      validateDagInput(target.graph, isAgentInput(input) ? {} : (input.graphInput ?? {}));
+    }
     const runId = createRunId();
     const controller = new AbortController();
     const signal =

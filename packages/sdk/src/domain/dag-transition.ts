@@ -5,7 +5,7 @@ export function graphCapabilityIds(graph: DAGSpec): readonly string[] {
   return unique(
     graph.nodes.flatMap((node) => {
       if (node.kind === 'capability') return [node.capabilityId];
-      if (node.kind === 'agent') return [];
+      if (node.kind === 'agent' || node.kind === 'condition') return [];
       return graphCapabilityIds(node.graph);
     }),
   );
@@ -15,7 +15,7 @@ export function graphAgentIds(graph: DAGSpec): readonly string[] {
   return unique(
     graph.nodes.flatMap((node) => {
       if (node.kind === 'agent') return [node.agentId];
-      if (node.kind === 'capability') return [];
+      if (node.kind === 'capability' || node.kind === 'condition') return [];
       return graphAgentIds(node.graph);
     }),
   );

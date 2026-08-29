@@ -20,7 +20,7 @@ TypeScript 的判别联合、泛型、Zod schema 与 `AsyncIterable` 重新设�
 这不是 Python 代码的逐行翻译。SDK、持久化 Host 和 Web 工作台位于同一 pnpm
 workspace，共享一套版本化契约；业务代码仍可以只安装无服务端依赖的 `dagent-ai`。
 
-当前版本：**0.8.3**。要求 Node.js 24 或更高版本。
+当前版本：**0.9.0**。要求 Node.js 24 或更高版本。
 
 ## 核心能力
 
@@ -30,8 +30,8 @@ workspace，共享一套版本化契约；业务代码仍可以只安装无服�
    边界元数据。
 3. **Canonical DAG** — 动态规划和 `DagBuilder` 最终都产生同一份纯数据 `DAGSpec`，
    运行前统一校验。
-4. **受控 Dataflow** — 支持 capability、agent、subgraph、map、bounded loop、条件边与
-   artifact，不执行模型生成的任意代码。
+4. **受控 Dataflow** — 支持 capability、agent、一等 condition 路由、subgraph、map、
+   bounded loop、普通 edge gate 与 artifact，不执行模型生成的任意代码。
 5. **可恢复审核** — 高风险调用和 DAG 审核生成带 revision、fingerprint 与冻结执行计划的
    V4 checkpoint。
 6. **有界会话上下文** — V3 `ConversationState` 是唯一权威历史，支持附件、外置结果、
@@ -225,7 +225,7 @@ pnpm format:check
 
 ## 版本关系
 
-本实现当前与 Dagent **0.8.3** 的公开运行语义对齐。Python 与 TypeScript 版本不承诺
+本实现当前与 Dagent **0.9.0** 的公开运行语义对齐。Python 与 TypeScript 版本不承诺
 逐符号 API 相同：迁移时应对照行为契约，并使用本仓库文档中的 TypeScript 示例。
 
 ## License

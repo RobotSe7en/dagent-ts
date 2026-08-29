@@ -42,9 +42,10 @@ const runner = new Runner({
 });
 ```
 
-`workspace` is the default run workspace. A single `run()` can select another workspace with
-`workspacePath`. `runtimeDirectory` must be a safe relative path and stores private results and
-resumption history in every run workspace.
+`workspace` is the default run workspace. It defaults to `~/.dagent`; a single `run()` can select
+another workspace with `workspacePath`. `runtimeDirectory` defaults to `.runtime`, must be a safe
+relative path, and stores private results and resumption history in every run workspace. Hosts that
+own persistence should pass both paths explicitly.
 
 Directories are created lazily:
 

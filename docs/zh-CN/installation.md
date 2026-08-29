@@ -90,7 +90,7 @@ curl http://127.0.0.1:8000/api/v1/health
 ```json
 {
   "status": "ok",
-  "version": "0.8.3"
+  "version": "0.9.0"
 }
 ```
 

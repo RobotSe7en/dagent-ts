@@ -129,7 +129,7 @@ export function DagWorkspace() {
             <div className="canvas-empty">
               <Workflow size={28} />
               <strong>空执行图</strong>
-              <span>添加 capability、agent、map、loop 或 subgraph 节点。</span>
+              <span>添加 capability、agent、condition、map、loop 或 subgraph 节点。</span>
             </div>
           ) : (
             <ReactFlow nodes={flow.nodes} edges={flow.edges} fitView>
@@ -170,7 +170,8 @@ export function toFlow(graph: DAGSpec): {
       id: `${edge.from}-${edge.to}-${index}`,
       source: edge.from,
       target: edge.to,
-      animated: edge.condition !== undefined,
+      ...(edge.branch === undefined ? {} : { label: edge.branch }),
+      animated: edge.condition !== undefined || edge.branch !== undefined,
     })),
   };
 }

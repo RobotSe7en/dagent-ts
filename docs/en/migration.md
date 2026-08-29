@@ -6,12 +6,49 @@ than replace symbols mechanically.
 
 ## Current Release Line
 
-| Version | Contracts                                                       |
-| ------- | --------------------------------------------------------------- |
-| 0.8.3   | V3 Conversation/Run state, V4 plan/checkpoint, canonical DAG v1 |
-| 0.8.0   | First complete TypeScript 0.8 baseline                          |
+| Version | Contracts                                                                 |
+| ------- | ------------------------------------------------------------------------- |
+| 0.9.0   | Canonical DAG v1 with condition nodes, branch edges, and validated inputs |
+| 0.8.3   | V3 Conversation/Run state and V4 plan/checkpoint                          |
+| 0.8.0   | First complete TypeScript 0.8 baseline                                    |
 
 See the [CHANGELOG](../../CHANGELOG.md) for detailed changes.
+
+## 0.9.0
+
+### Condition Routing
+
+`DagNode` adds the `kind: "condition"` variant with ordered `cases` and a required
+`defaultBranch`. `DagEdge.branch` connects the selected branch to one or more downstream nodes;
+`DagNodeResult.selectedBranch` persists the decision. Hosts and exhaustive decoders must accept
+these optional/new variants before loading a 0.9 DAG or checkpoint.
+
+Use `DagBuilder.condition(...)` and `addEdge(..., { branch })`. `allOf`, `anyOf`, and
+`notCondition` compose conditions. Ordinary `condition` edges remain independent gates: a branch
+edge must originate at a condition node, and one edge cannot declare both forms.
+
+### Static Input And Output
+
+Static `graphInput` now accepts any `JsonValue`. Declared input schemas must be valid,
+self-contained JSON Schema Draft 2020-12 documents. Runner validates root input before workspace
+creation and validates resolved subgraph and loop inputs before child capability execution.
+`DagInputValidationError` exposes instance `path` and `schemaPath`.
+
+Exact structured static output remains available as `RunOutcome.output` and in V3 run state and V4
+checkpoints. No stored-DAG database migration is required.
+
+### Runner Defaults And Profiles
+
+`workspace` and `runtimeDirectory` are now optional and default to `~/.dagent` and `.runtime`.
+Storage-owning hosts should keep passing explicit values. The built-in `conversation` profile is
+now limited to direct response and bounded tool selection; DAG planning remains owned by DagAgent.
+
+### Compatibility
+
+Existing capability, agent, subgraph, map, loop, and ordinary conditional-edge graphs retain their
+behavior. The canonical schema version remains 1, and conversation/checkpoint versions remain V3
+and V4. The breaking surface is limited to consumers that exhaustively decode node/edge/result
+unions without accepting the 0.9 variants.
 
 ## 0.8.3
 
@@ -70,19 +107,21 @@ assume one run updates a conversation only once.
 Content, value, and artifact references are bounded and deduplicated in model projections. Prompts
 that relied on earlier duplicate injection should reference content explicitly once.
 
-## Migrating from Python Dagent 0.8.3
+## Migrating from Python Dagent 0.9.0
 
 ### Package and Language Boundaries
 
-| Python concept     | TypeScript entry                                               |
-| ------------------ | -------------------------------------------------------------- |
-| Runner             | `new Runner(options)`                                          |
-| function tool      | `tool({ input: zod, output: zod, execute })`                   |
-| Agent config       | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
-| static DAG builder | `DagBuilder<TInput, TOutput>`                                  |
-| async event stream | `for await (const event of runner.stream(...))`                |
-| Pydantic boundary  | Zod schema                                                     |
-| context manager    | `await using` / `try...finally`                                |
+| Python concept               | TypeScript entry                                               |
+| ---------------------------- | -------------------------------------------------------------- |
+| Runner                       | `new Runner(options)`                                          |
+| function tool                | `tool({ input: zod, output: zod, execute })`                   |
+| Agent config                 | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
+| static DAG builder           | `DagBuilder<TInput, TOutput>`                                  |
+| `ConditionNode`              | `builder.condition(...)` plus `{ branch }` edge options        |
+| `all_of` / `any_of` / `not_` | `allOf` / `anyOf` / `notCondition`                             |
+| async event stream           | `for await (const event of runner.stream(...))`                |
+| Pydantic boundary            | Zod schema                                                     |
+| context manager              | `await using` / `try...finally`                                |
 
 Do not reproduce a Python class hierarchy as TypeScript classes. Agents and domain contracts should
 remain immutable data. Mutable lifecycles belong to Runner, Manager, Store, and host services.

@@ -127,6 +127,9 @@ importers:
       '@modelcontextprotocol/core':
         specifier: 2.0.0
         version: 2.0.0
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       openai:
         specifier: 7.0.0
         version: 7.0.0(zod@4.4.3)
