@@ -206,6 +206,12 @@ describe('Runner static DAG artifacts', () => {
     expect(pending.status).toBe('awaiting-review');
     if (pending.status !== 'awaiting-review') return;
     expect(pending.state.artifactStates.source?.status).toBe('created');
+    expect(pending.state.inputArtifactFiles).toEqual([
+      {
+        artifactId: 'source',
+        files: [{ path: 'inputs/source.md', name: 'source.md', size: 13 }],
+      },
+    ]);
     expect(JSON.stringify(pending.checkpoint)).not.toContain('uploaded-data');
 
     const completed = await runner.resume(pending.checkpoint, {
@@ -223,6 +229,96 @@ describe('Runner static DAG artifacts', () => {
       path: 'inputs/source.md',
       content: 'uploaded-data',
     });
+    await runner.close();
+  });
+
+  it('resolves artifact.files from the upload-time manifest in deterministic order', async () => {
+    const workspacePath = await temporaryRoot();
+    const listFiles = tool({
+      id: 'tool.list_manifest',
+      input: z
+        .object({
+          files: z.array(
+            z
+              .object({
+                path: z.string(),
+                name: z.string(),
+                size: z.number(),
+                mediaType: z.string().optional(),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+      output: z.array(
+        z
+          .object({
+            path: z.string(),
+            name: z.string(),
+            size: z.number(),
+            mediaType: z.string().optional(),
+          })
+          .strict(),
+      ),
+      execute: ({ files }) => files,
+    });
+    const runner = new Runner({
+      ...runnerPaths,
+      provider: new MockProvider([]),
+      capabilities: [listFiles],
+    });
+    const target = defineStaticDag({
+      schemaVersion: 1,
+      id: 'manifest_files',
+      name: 'Manifest files',
+      artifacts: {
+        source: { id: 'source', paths: ['inputs/source/'], required: false },
+      },
+      nodes: [
+        {
+          id: 'list',
+          kind: 'capability',
+          capabilityId: 'tool.list_manifest',
+          arguments: {
+            files: {
+              $expr: { type: 'artifact', artifactId: 'source', field: 'files', path: [] },
+            },
+          },
+          artifactInputs: ['source'],
+        },
+      ],
+      edges: [],
+    });
+
+    const outcome = await runner.run(
+      target,
+      {
+        graphInput: {},
+        artifactUploads: {
+          source: [
+            { filename: 'z.txt', content: Buffer.from('z') },
+            {
+              filename: 'nested/a.md',
+              content: Buffer.from('first'),
+              mediaType: 'text/markdown',
+            },
+          ],
+        },
+      },
+      { workspacePath },
+    );
+
+    expect(outcome.status).toBe('completed');
+    if (outcome.status !== 'completed') throw new Error(`Unexpected status: ${outcome.status}`);
+    expect(outcome.output).toEqual([
+      {
+        path: 'inputs/source/nested/a.md',
+        name: 'a.md',
+        size: 5,
+        mediaType: 'text/markdown',
+      },
+      { path: 'inputs/source/z.txt', name: 'z.txt', size: 1 },
+    ]);
     await runner.close();
   });
 });

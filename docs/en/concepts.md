@@ -88,7 +88,7 @@ checksum, preview, and provenance, and downstream nodes restore them transparent
 Ordinary user JSON is never guessed to be an internal reference.
 
 `RunState` describes current execution, `RunOutcome` describes a call result, and `RunEvent`
-describes the ordered process. When review pauses a run, a V4 `RunCheckpoint` freezes the target,
+describes the ordered process. When review pauses a run, a V5 `RunCheckpoint` freezes the target,
 capability-definition fingerprints, limits, runtime directory, initial additional system prompt,
 and conversation state.
 

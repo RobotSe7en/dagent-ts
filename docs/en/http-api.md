@@ -38,7 +38,7 @@ GET /api/v1/health
 ```
 
 ```json
-{ "status": "ok", "version": "0.9.0" }
+{ "status": "ok", "version": "0.9.5" }
 ```
 
 ## Projects and Files
@@ -69,6 +69,7 @@ Create:
 ```json
 {
   "projectId": "project_...",
+  "workspaceScope": "project",
   "title": "Release review",
   "kind": "chat"
 }
@@ -76,6 +77,8 @@ Create:
 
 `kind` is `chat`, `dynamic-dag`, or `static-dag`. Conversation details contain a public V3
 projection with reasoning, tool calls, internal items, and sensitive system prompts removed.
+For a managed standalone conversation, omit `projectId` and use `workspaceScope: "standalone"`.
+The run receives an isolated host-owned workspace instead of a project root.
 
 ## Start a Run
 
@@ -207,6 +210,8 @@ client does not upload a checkpoint. Duplicate, stale, or mismatched decisions r
 | Methods                    | Path                               | Purpose                                  |
 | -------------------------- | ---------------------------------- | ---------------------------------------- |
 | `POST`                     | `/dags/validate`                   | validate canonical DAGSpec               |
+| `POST`                     | `/dags/inspect`                    | return deterministic DAG diagnostics     |
+| `POST`                     | `/dags/design`                     | non-executing model-assisted DAG design  |
 | `GET` / `POST`             | `/saved-dags`                      | query or create saved graphs             |
 | `GET` / `PATCH` / `DELETE` | `/saved-dags/:id`                  | details, revision update, archive/delete |
 | `GET` / `POST`             | `/saved-dags/:id/runs`             | run history and start                    |
@@ -215,6 +220,8 @@ client does not upload a checkpoint. Duplicate, stale, or mismatched decisions r
 | `GET`                      | `/orchestration-sessions/:id/runs` | orchestration runs                       |
 
 A saved DAG stores graph and layout separately. Only graph enters Runner.
+Design and inspection never start a run or invoke a graph. See
+[Non-Executing DAG Design](dag-design.md).
 
 ## Configuration Resources
 

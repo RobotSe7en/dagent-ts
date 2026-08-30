@@ -14,12 +14,16 @@ const scopedParametersSchema = z.object({
 const conversationListSchema = z.object({ projectId: z.string().min(1).optional() });
 const conversationCreateSchema = z
   .object({
-    projectId: z.string().min(1),
+    projectId: z.string().min(1).optional(),
     title: z.string().trim().min(1).max(300),
     kind: conversationKindSchema.default('chat'),
+    workspaceScope: z.enum(['project', 'standalone']).optional(),
   })
   .strict();
-const scopedConversationCreateSchema = conversationCreateSchema.omit({ projectId: true });
+const scopedConversationCreateSchema = conversationCreateSchema.omit({
+  projectId: true,
+  workspaceScope: true,
+});
 const conversationUpdateSchema = z.object({ title: z.string().trim().min(1).max(300) }).strict();
 
 export function registerConversationRoutes(
@@ -37,7 +41,12 @@ export function registerConversationRoutes(
 
   server.post('/api/v1/conversations', async (request, reply) => {
     const input = conversationCreateSchema.parse(request.body);
-    return createConversation(repository, reply, input);
+    return createConversation(repository, reply, {
+      title: input.title,
+      kind: input.kind,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.workspaceScope === undefined ? {} : { workspaceScope: input.workspaceScope }),
+    });
   });
 
   server.get('/api/v1/conversations/:id', async (request, reply) => {
@@ -90,7 +99,11 @@ export function registerConversationRoutes(
   server.post('/api/v1/projects/:id/conversations', async (request, reply) => {
     const { id } = identifierParametersSchema.parse(request.params);
     const input = scopedConversationCreateSchema.parse(request.body);
-    return createConversation(repository, reply, { ...input, projectId: id });
+    return createConversation(repository, reply, {
+      ...input,
+      projectId: id,
+      workspaceScope: 'project',
+    });
   });
 
   server.get(
@@ -168,12 +181,16 @@ async function createConversation(
   repository: AppRepository,
   reply: FastifyReply,
   input: {
-    readonly projectId: string;
+    readonly projectId?: string;
     readonly title: string;
     readonly kind: ConversationKind;
+    readonly workspaceScope?: 'project' | 'standalone';
   },
 ) {
-  if ((await repository.getProject(input.projectId)) === undefined) {
+  if (
+    input.projectId !== undefined &&
+    (await repository.getProject(input.projectId)) === undefined
+  ) {
     return notFound(reply, 'Project');
   }
   return reply.status(201).send(publicConversation(await repository.createConversation(input)));

@@ -1,5 +1,6 @@
 import type {
   ArtifactStates,
+  ArtifactFileManifest,
   ArtifactUpload,
   CapabilityInvocation,
   ContentReference,
@@ -7,6 +8,8 @@ import type {
   DagNode,
   DagNodeResult,
   JsonValue,
+  ConversationState,
+  PendingReview,
 } from '../contracts/index.js';
 import {
   createInvocationId,
@@ -27,10 +30,34 @@ import { ArtifactWorkspace } from './artifacts.js';
 import type { RuntimeExecutionContext } from './types.js';
 
 export type AgentNodeInvoker = (
+  nodeId: string,
   agentId: string,
   prompt: string,
   context: RuntimeExecutionContext,
-) => Promise<JsonValue>;
+) => Promise<AgentNodeOutcome>;
+
+export type AgentNodeOutcome =
+  | { readonly status: 'completed'; readonly output: JsonValue }
+  | {
+      readonly status: 'awaiting-review';
+      readonly conversation: ConversationState;
+      readonly review: PendingReview;
+    };
+
+export class StaticAgentReviewPause extends Error {
+  public nodeResults: Readonly<Record<string, DagNodeResult>> = {};
+  public artifactStates: ArtifactStates = {};
+
+  public constructor(
+    public readonly nodeId: string,
+    public readonly agentId: string,
+    public readonly conversation: ConversationState,
+    public readonly review: PendingReview,
+  ) {
+    super(`Static agent node '${nodeId}' requires capability review.`);
+    this.name = 'StaticAgentReviewPause';
+  }
+}
 
 export type DagExecutionResult = {
   readonly output: JsonValue;
@@ -60,6 +87,7 @@ export class DagExecutor {
       readonly previousResults?: Readonly<Record<string, DagNodeResult>>;
       readonly previousArtifactStates?: ArtifactStates;
       readonly artifactUploads?: Readonly<Record<string, readonly ArtifactUpload[]>>;
+      readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
       readonly item?: JsonValue;
       readonly iteration?: number;
       readonly validated?: boolean;
@@ -97,35 +125,59 @@ export class DagExecutor {
         });
       }
 
-      const batch = ready.slice(0, context.budget.limits.maxConcurrency);
-      const completed = await Promise.all(
-        batch.map(async (node) => {
-          const incoming = predecessors.get(node.id) ?? [];
-          const resolutionContext = {
-            graphInput,
-            nodeResults: results,
-            nodeValues,
-            graph,
-            workspacePath: context.workspacePath,
-            ...(options.item === undefined ? {} : { item: options.item }),
-            ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
-          };
-          const shouldSkip =
-            incoming.length > 0 &&
-            incoming.every((edge) => !isLiveEdge(edge, results, resolutionContext));
-          if (shouldSkip) {
-            return {
-              result: dagNodeResultSchema.parse({
-                nodeId: node.id,
-                status: 'skipped',
-                content: 'Conditional dependency was not satisfied.',
-                completedAt: nowTimestamp(),
-              }),
+      const readyAgent = ready.find(({ kind }) => kind === 'agent');
+      const batch =
+        readyAgent === undefined
+          ? ready.slice(0, context.budget.limits.maxConcurrency)
+          : [readyAgent];
+      let completed: ExecutedNode[];
+      try {
+        completed = await Promise.all(
+          batch.map(async (node) => {
+            const incoming = predecessors.get(node.id) ?? [];
+            const resolutionContext = {
+              graphInput,
+              nodeResults: results,
+              nodeValues,
+              graph,
+              workspacePath: context.workspacePath,
+              ...(options.inputArtifactFiles === undefined
+                ? {}
+                : { inputArtifactFiles: options.inputArtifactFiles }),
+              ...(options.item === undefined ? {} : { item: options.item }),
+              ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
             };
-          }
-          return this.#executeNode(node, graphInput, graph, results, nodeValues, context, options);
-        }),
-      );
+            const shouldSkip =
+              incoming.length > 0 &&
+              incoming.every((edge) => !isLiveEdge(edge, results, resolutionContext));
+            if (shouldSkip) {
+              return {
+                result: dagNodeResultSchema.parse({
+                  nodeId: node.id,
+                  status: 'skipped',
+                  content: 'Conditional dependency was not satisfied.',
+                  completedAt: nowTimestamp(),
+                }),
+              };
+            }
+            return this.#executeNode(
+              node,
+              graphInput,
+              graph,
+              results,
+              nodeValues,
+              context,
+              options,
+            );
+          }),
+        );
+      } catch (error) {
+        if (error instanceof StaticAgentReviewPause) {
+          error.nodeResults = { ...results };
+          error.artifactStates = artifacts.snapshot();
+        }
+        throw error;
+      }
       for (const executed of completed) {
         const { result } = executed;
         results[result.nodeId] = result;
@@ -165,6 +217,9 @@ export class DagExecutor {
             nodeValues,
             graph,
             workspacePath: context.workspacePath,
+            ...(options.inputArtifactFiles === undefined
+              ? {}
+              : { inputArtifactFiles: options.inputArtifactFiles }),
             ...(options.item === undefined ? {} : { item: options.item }),
             ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
           });
@@ -195,7 +250,11 @@ export class DagExecutor {
     results: Readonly<Record<string, DagNodeResult>>,
     nodeValues: Readonly<Record<string, JsonValue>>,
     context: RuntimeExecutionContext,
-    options: { readonly item?: JsonValue; readonly iteration?: number },
+    options: {
+      readonly item?: JsonValue;
+      readonly iteration?: number;
+      readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
+    },
   ): Promise<ExecutedNode> {
     context.budget.reserveNodeExecution(context.signal);
     const startedAt = nowTimestamp();
@@ -206,6 +265,9 @@ export class DagExecutor {
       nodeValues,
       graph,
       workspacePath: context.workspacePath,
+      ...(options.inputArtifactFiles === undefined
+        ? {}
+        : { inputArtifactFiles: options.inputArtifactFiles }),
       ...(options.item === undefined ? {} : { item: options.item }),
       ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
     };
@@ -266,7 +328,16 @@ export class DagExecutor {
           const promptValue = resolveBinding(node.prompt, resolutionContext);
           const prompt =
             typeof promptValue === 'string' ? promptValue : JSON.stringify(promptValue);
-          output = await this.#invokeAgent(node.agentId, prompt, context);
+          const invoked = await this.#invokeAgent(node.id, node.agentId, prompt, context);
+          if (invoked.status === 'awaiting-review') {
+            throw new StaticAgentReviewPause(
+              node.id,
+              node.agentId,
+              invoked.conversation,
+              invoked.review,
+            );
+          }
+          output = invoked.output;
           content = typeof output === 'string' ? output : JSON.stringify(output);
           break;
         }
@@ -371,6 +442,7 @@ export class DagExecutor {
         value: output,
       };
     } catch (error) {
+      if (error instanceof StaticAgentReviewPause) throw error;
       return {
         result: dagNodeResultSchema.parse({
           nodeId: node.id,

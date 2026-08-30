@@ -7,6 +7,8 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       '**/node_modules/**',
+      '**/.vite/**',
+      '**/out/**',
       'packages/app/web/**',
       'reference/**',
       'eslint.config.mjs',
@@ -43,6 +45,14 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
+    },
+  },
+  {
+    files: ['apps/desktop/scripts/*.mjs', 'packages/desktop/**/*.js'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: { process: 'readonly' },
     },
   },
 );

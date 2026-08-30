@@ -55,7 +55,7 @@ flowchart LR
   Plan --> Validate["DAG validation"]
   Validate --> Review{"review?"}
   Review -->|approve/not required| Exec
-  Review -->|required| Checkpoint["V4 checkpoint"]
+  Review -->|required| Checkpoint["V5 checkpoint"]
   Tool --> Catalog["CapabilityCatalog"]
   Exec --> Catalog
   Tool --> State["RunState + ConversationState"]
@@ -77,7 +77,7 @@ Modules collaborate through public interfaces rather than a shared mutable “gl
 - `CapabilityBinding<TInput, TOutput>` joins Zod schemas, execution, and boundary metadata.
 - `DAGSpec` is the sole execution graph format, supporting capability, agent, subgraph, map, and
   bounded-loop nodes.
-- `RunState` is V3 current state. V4 `RunCheckpoint` freezes target, capability scope, limits,
+- `RunState` is V4 current state. V5 `RunCheckpoint` freezes target, capability scope, limits,
   `runtimeDirectory`, initial `extraSystemPrompt`, and state.
 - `RunEvent` is a discriminated union with run id, sequence, and timestamp.
 - `ConversationState` is provider-neutral history.
@@ -89,7 +89,7 @@ Contract versions:
 
 - canonical DAG: schema version 1
 - `ConversationState` / `RunState`: V3
-- `ResolvedRunPlan` / `RunCheckpoint`: V4
+- `ResolvedRunPlan` / `RunCheckpoint`: V5
 
 These versions differ because contracts evolve independently. A host must not collapse them into
 one database schema version.

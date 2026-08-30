@@ -27,7 +27,8 @@ export const valueExpressionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('artifact'),
     artifactId: identifierSchema,
-    field: z.enum(['path', 'paths', 'absolutePath', 'absolutePaths']).default('path'),
+    field: z.enum(['path', 'paths', 'absolutePath', 'absolutePaths', 'files']).default('path'),
+    path: z.array(z.union([z.string(), z.number().int().nonnegative()])).default([]),
   }),
   z.object({
     type: z.literal('item'),

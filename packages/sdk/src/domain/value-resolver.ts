@@ -9,6 +9,7 @@ import type {
 } from '../contracts/dag.js';
 import { valueExpressionSchema } from '../contracts/dag.js';
 import type { JsonValue } from '../contracts/common.js';
+import type { ArtifactFileManifest } from '../contracts/artifact.js';
 import { DagentError } from '../errors.js';
 
 export type ValueResolutionContext = {
@@ -17,6 +18,7 @@ export type ValueResolutionContext = {
   readonly nodeValues?: Readonly<Record<string, JsonValue>>;
   readonly graph: DAGSpec;
   readonly workspacePath: string;
+  readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
   readonly item?: JsonValue;
   readonly iteration?: number;
 };
@@ -115,6 +117,20 @@ function resolveExpression(
       const absolutePaths = artifact.paths.map((path) =>
         resolveWorkspacePath(context.workspacePath, path),
       );
+      if (expression.field === 'files') {
+        const files =
+          context.inputArtifactFiles?.find(({ artifactId }) => artifactId === expression.artifactId)
+            ?.files ?? [];
+        return readPath(
+          files.map((file) => ({
+            path: file.path,
+            name: file.name,
+            size: file.size,
+            ...(file.mediaType === undefined ? {} : { mediaType: file.mediaType }),
+          })),
+          expression.path,
+        );
+      }
       switch (expression.field) {
         case 'path':
           return artifact.paths[0] ?? '';

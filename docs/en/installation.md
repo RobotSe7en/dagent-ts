@@ -39,6 +39,19 @@ The default URL is `http://127.0.0.1:8000`, and the default data directory is `~
 Before binding to a non-loopback address, put authentication, TLS, and access control in a reverse
 proxy. The host itself is designed as a local single-user application.
 
+## Install DagentWork Desktop
+
+```bash
+npm install -g dagent-ai-desktop
+dagent-desktop
+```
+
+The small launcher depends optionally on exactly one native payload for the current platform:
+macOS, Linux, or Windows on x64 or arm64. Desktop is a local ToolAgent workbench; it does not expose
+DagAgent, AutoAgent, static/saved DAGs, DAG Studio, enterprise connections, accounts, or RBAC.
+Its SQLite state and managed standalone-task workspaces live under the Electron user-data directory
+and do not reuse CLI/Web data.
+
 ## Provider Credentials
 
 The default configuration reads environment variables:
@@ -93,7 +106,7 @@ The health endpoint returns:
 ```json
 {
   "status": "ok",
-  "version": "0.9.0"
+  "version": "0.9.5"
 }
 ```
 

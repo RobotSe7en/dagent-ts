@@ -72,7 +72,7 @@ map、loop 以及 resume 只有在 provenance 明确时才恢复值。文件缺�
 ## 结构化 DAG 结果
 
 静态 DAG 完成后，会把解析后的 `DAGSpec.output` 原样写入 `RunOutcome.output`，无论它是
-scalar、list 还是 object。同一个值也会持久化到 `RunState.output` 与 V4 checkpoint。
+scalar、list 还是 object。同一个值也会持久化到 `RunState.output` 与 V5 checkpoint。
 非静态运行继续通过同一个 outcome 字段提供最终回答。
 
 Condition 节点结果包含 `{ branch: string }`，并单独记录 `selectedBranch`，使 checkpoint
@@ -149,6 +149,10 @@ DAG review 还可附带经过校验的 `replacementGraph`。
 在 SDK 进程内，重复决定会被拒绝；Host 额外使用数据库原子 claim，防止并发请求和重启后
 重复消费。审核后的 dynamic DAG 若失败并再次规划到审核边界，会推进权威 conversation
 revision。
+
+可审核的 allowed-path 越界会把规范化 `boundaryPaths` 写入 `PendingReview.metadata`。批准
+只授权这些路径供同一 run 的后续 ToolAgent 调用使用，包括 checkpoint 继续之后。不同路径
+仍需审核；授权不会升级为跨 run 策略，硬性工作区逃逸不能被批准。
 
 ## 取消
 

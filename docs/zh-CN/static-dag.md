@@ -137,6 +137,10 @@ graph.setOutput(answer.output());
 `researcher` 必须在 Runner 中注册。Agent 节点输出是字符串；更复杂的结构应由 capability
 产生或通过明确 schema 的 DAG 输出。
 
+顶层直接 ToolAgent node 使用 ToolAgent 原有的内部调用审核策略，并可从 checkpoint 恢复。
+Subgraph、map 或 loop 内嵌套的 Agent node 会在执行前被拒绝，因为其 ToolAgent 进度尚不能
+安全恢复。静态 capability node 仍由 DAG 作者直接授权。
+
 ## Artifacts
 
 ```ts
@@ -160,6 +164,11 @@ graph.capability(
 
 artifact 路径相对运行 workspace。`artifactInputs`/`artifactOutputs` 声明节点边界，用于执行
 前校验和运行状态跟踪；能力实现仍必须安全处理路径。
+
+对于上传的目录输入，`report.files()` 返回排序后的上传时清单。每个条目包含相对工作区的
+`path`、basename `name`、字节 `size` 与可选 `mediaType`；可通过 `.at(index, 'path')`
+选择字段，或对列表执行 map。运行和恢复时都不会扫描 workspace。上传会拒绝不安全或重复
+目标、符号链接目标、超过 256 个文件、单文件超过 25 MiB 或总量超过 100 MiB。
 
 ## Map
 

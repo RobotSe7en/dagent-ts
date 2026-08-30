@@ -10,11 +10,13 @@ import type { CapabilityCatalog } from '../capabilities/catalog.js';
 import type { ChatProvider } from '../providers/provider.js';
 import type { ExecutionBudget } from './execution-budget.js';
 import type { RunEventEmitter } from './events.js';
+import type { SkillStore } from '../skills/index.js';
 
 export type RuntimeExecutionContext = {
   readonly runId: RunId;
   readonly provider: ChatProvider;
   readonly catalog: CapabilityCatalog;
+  readonly skills: SkillStore;
   readonly budget: ExecutionBudget;
   readonly events: RunEventEmitter;
   readonly workspacePath: string;

@@ -32,6 +32,27 @@ node --experimental-strip-types examples/condition-routing.ts
 [`condition-routing.ts`](condition-routing.ts) is an offline static-DAG example with ordered cases,
 composable conditions, mutually exclusive branch edges, and exact structured output.
 
+## Non-Executing DAG Design
+
+```bash
+export OPENAI_API_KEY=...
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/dag-design.ts
+```
+
+[`dag-design.ts`](dag-design.ts) validates a graph locally, then uses the design-only API with a
+selected-node focus and observable lifecycle events. It never executes the graph.
+
+## Artifact File Manifests
+
+```bash
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/static-dag-artifact-files.ts
+```
+
+[`static-dag-artifact-files.ts`](static-dag-artifact-files.ts) is offline and shows bounded static
+input uploads plus the deterministic `ArtifactRef.files()` manifest.
+
 ## App Configuration
 
 [`dagent.yaml`](dagent.yaml) is a complete starting configuration for `dagent-ai-app`:

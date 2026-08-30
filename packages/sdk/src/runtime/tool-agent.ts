@@ -12,6 +12,7 @@ import type {
   ToolResultMessage,
   ModelScope,
   Attachment,
+  PendingReview,
 } from '../contracts/index.js';
 import {
   appendConversationItems,
@@ -29,9 +30,14 @@ import {
 import type { CapabilityDefinition, CapabilityInvocation } from '../contracts/index.js';
 import { DagentError, errorMessage, throwIfAborted } from '../errors.js';
 import type { ProviderTool } from '../providers/provider.js';
-import { composeSystemPrompt, runtimeContextForWorkspace } from '../profiles/prompt-builder.js';
+import {
+  composeSystemPrompt,
+  formatSkills,
+  runtimeContextForWorkspace,
+} from '../profiles/prompt-builder.js';
 import { ContextAssembler } from './context-assembler.js';
 import { normalizeCapabilityResult } from './result-storage.js';
+import { checkInvocationBoundary } from './boundary-review.js';
 import { withRetry } from './retry.js';
 import type { AgentLoopResult, RuntimeExecutionContext } from './types.js';
 
@@ -46,6 +52,7 @@ export type ToolAgentInput = {
 export type ResumeCapability = {
   readonly invocation: CapabilityInvocation;
   readonly decision: ReviewDecision;
+  readonly review: PendingReview;
 };
 
 export class ToolAgentRuntime {
@@ -71,6 +78,7 @@ export class ToolAgentRuntime {
     );
     let thread = conversationStateSchema.parse(initialConversation);
     const contextUsages: ContextUsage[] = [];
+    const approvedBoundaryPaths = approvedPathsForResume(resume);
     try {
       if (input.prompt !== undefined) {
         const userTurn = input.promptKind !== 'internal-continuation';
@@ -94,6 +102,12 @@ export class ToolAgentRuntime {
       ];
       const definitions = context.catalog.definitions(capabilityIds);
       const providerTools = definitions.map(toProviderTool);
+      const visibleSkills =
+        agent.scope.skills.length === 0
+          ? []
+          : (await context.skills.list())
+              .filter((skill) => agent.scope.skills.includes(skill.qualifiedName))
+              .map((skill) => ({ name: skill.qualifiedName, description: skill.description }));
 
       if (resume !== undefined) {
         const reviewed = await this.#resumeCapability(resume, context, agent.scope.skills);
@@ -111,6 +125,7 @@ export class ToolAgentRuntime {
               ...(context.extraSystemPrompt === undefined
                 ? {}
                 : { extraSystemPrompt: context.extraSystemPrompt }),
+              dynamicSections: visibleSkills.length === 0 ? [] : [formatSkills(visibleSkills)],
             }),
           },
           conversation: thread,
@@ -202,7 +217,20 @@ export class ToolAgentRuntime {
             capabilityId: definition.id,
             arguments: arguments_,
           };
-          if (requiresReview(definition, agent.reviewLevel)) {
+          const boundary = checkInvocationBoundary(
+            definition,
+            invocation,
+            context.workspacePath,
+            approvedBoundaryPaths,
+          );
+          if (boundary.status === 'blocked') {
+            thread = appendConversationItems(
+              thread,
+              boundaryFailureResult(invocation, context.runId, boundary.message),
+            );
+            continue;
+          }
+          if (boundary.status === 'review' || requiresReview(definition, agent.reviewLevel)) {
             thread = appendConversationItems(
               thread,
               pendingToolCallResult(invocation, context.runId),
@@ -217,8 +245,19 @@ export class ToolAgentRuntime {
               id: createReviewId(),
               revision: thread.revision,
               kind: 'capability-review',
-              summary: `Approve ${definition.id} (${definition.risk})`,
+              summary:
+                boundary.status === 'review'
+                  ? boundary.message
+                  : `Approve ${definition.id} (${definition.risk})`,
               invocation,
+              metadata:
+                boundary.status === 'review'
+                  ? {
+                      reason: 'boundary-violation',
+                      boundaryPaths: [...boundary.paths],
+                      approvedBoundaryPaths: [...approvedBoundaryPaths].sort(),
+                    }
+                  : { approvedBoundaryPaths: [...approvedBoundaryPaths].sort() },
               createdAt: new Date().toISOString(),
             });
             await context.events.emit({ type: 'review-required', review });
@@ -451,6 +490,41 @@ function pendingToolCallResult(invocation: CapabilityInvocation, runId: RunId): 
     scope: 'conversation',
     visibility: 'internal',
   });
+}
+
+function boundaryFailureResult(
+  invocation: CapabilityInvocation,
+  runId: RunId,
+  message: string,
+): ToolResultMessage {
+  return toolResultMessageSchema.parse({
+    type: 'tool-result',
+    runId,
+    callId: invocation.id,
+    name: invocation.capabilityId,
+    capabilityId: invocation.capabilityId,
+    status: 'failed',
+    content: inlineContent(message),
+    scope: 'conversation',
+    visibility: 'internal',
+  });
+}
+
+function approvedPathsForResume(resume: ResumeCapability | undefined): ReadonlySet<string> {
+  if (resume === undefined) return new Set();
+  const approved = stringArray(resume.review.metadata['approvedBoundaryPaths']);
+  if (
+    resume.decision.action === 'approve' &&
+    resume.review.metadata['reason'] === 'boundary-violation'
+  ) {
+    approved.push(...stringArray(resume.review.metadata['boundaryPaths']));
+  }
+  return new Set(approved);
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
 function replaceToolResult(

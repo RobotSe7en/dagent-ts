@@ -50,7 +50,7 @@ preview。只有带 `valueReference` provenance 的值才会被恢复，普通�
 
 ## 检查点与 Host 持久化
 
-V4 审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹、执行限制、运行目录、
+V5 审核检查点保存完整 V3 `conversation`、冻结的能力定义指纹、执行限制、运行目录、
 初始附加系统提示和 `contextUsage`。Host 对 checkpoint 使用一次性原子 claim，并在整体
 替换会话时使用 revision compare-and-swap。重复审核、定义变化或过期会话 revision
 都会在执行前被拒绝。
@@ -92,7 +92,7 @@ resume 需要的历史位于：
 <run workspace>/<runtimeDirectory>/history/
 ```
 
-V4 checkpoint 冻结 `runtimeDirectory`，因此 Runner 配置修改不会让旧 run 去错误目录寻找
+V5 checkpoint 冻结 `runtimeDirectory`，因此 Runner 配置修改不会让旧 run 去错误目录寻找
 资源。
 
 ## Host 公共投影

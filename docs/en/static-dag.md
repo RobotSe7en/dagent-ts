@@ -141,6 +141,11 @@ graph.setOutput(answer.output());
 `researcher` must be registered with Runner. An Agent node outputs a string. Use a capability or a
 DAG with an explicit schema for more complex structures.
 
+A direct top-level ToolAgent node uses the ToolAgent's ordinary inner-call review policy and can be
+resumed from its checkpoint. Agent nodes nested inside subgraphs, maps, or loops are rejected before
+execution because nested ToolAgent progress is not yet safely restorable. Static capability nodes
+remain directly authorized by the DAG author.
+
 ## Artifacts
 
 ```ts
@@ -165,6 +170,12 @@ graph.capability(
 Artifact paths are relative to the run workspace. `artifactInputs` and `artifactOutputs` declare
 node boundaries for preflight validation and runtime state tracking. Capability implementations
 must still handle paths safely.
+
+For uploaded directory inputs, `report.files()` returns a sorted upload-time manifest. Each entry
+has a workspace-relative `path`, basename `name`, byte `size`, and optional `mediaType`; use
+`.at(index, 'path')` or map over the list. It never scans the workspace during execution or resume.
+Uploads reject unsafe or duplicate targets, symlinked destinations, more than 256 files, a file over
+25 MiB, or more than 100 MiB total.
 
 ## Map
 

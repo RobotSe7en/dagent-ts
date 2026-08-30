@@ -37,6 +37,18 @@ dagent serve --config ./dagent.yaml
 默认地址为 `http://127.0.0.1:8000`，默认数据目录是 `~/.dagent-ts`。监听非回环地址前，
 应由反向代理补充认证、TLS 和访问控制；Host 本身按本地单用户应用设计。
 
+## 安装 DagentWork 桌面端
+
+```bash
+npm install -g dagent-ai-desktop
+dagent-desktop
+```
+
+轻量 Launcher 会按当前平台可选安装一个原生载荷，支持 macOS、Linux、Windows 的 x64
+与 arm64。桌面端是本地 ToolAgent 工作台，不暴露 DagAgent、AutoAgent、静态/已保存 DAG、
+DAG Studio、企业连接、账号或 RBAC。其 SQLite 状态与独立任务托管工作区位于 Electron
+用户数据目录，不复用 CLI/Web 数据。
+
 ## Provider 凭证
 
 默认配置从环境变量读取：
@@ -90,7 +102,7 @@ curl http://127.0.0.1:8000/api/v1/health
 ```json
 {
   "status": "ok",
-  "version": "0.9.0"
+  "version": "0.9.5"
 }
 ```
 

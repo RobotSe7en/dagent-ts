@@ -35,8 +35,8 @@ Host 启动时创建：
 | 表                       | 内容                                                 |
 | ------------------------ | ---------------------------------------------------- |
 | `projects`               | 项目元数据与 root path                               |
-| `conversations`          | 完整 V3 ConversationState、kind、revision            |
-| `runs`                   | target、去敏 input、status、最新 V4 checkpoint       |
+| `conversations`          | V3 state、可空 project、workspace scope 与 revision  |
+| `runs`                   | target、去敏 input、status、最新 V5 checkpoint       |
 | `run_events`             | `(run_id, sequence)` 唯一的完整事件日志              |
 | `saved_dags`             | canonical graph、画布 layout、revision、archive 状态 |
 | `orchestration_sessions` | conversation、draft graph 与 UI state 的关联         |
@@ -61,6 +61,11 @@ conversation resource store 或项目/artifact 文件系统管理。
 
 整体更新使用 revision CAS。数据库中的旧 V1/V2 或损坏结构在迁移 009 中标为 schema
 version 0；读取完整会话或继续运行返回冲突，不在请求路径中猜测转换。
+
+`workspaceScope` 为 `project` 或 `standalone`。项目会话必须有 `projectId`，独立会话禁止该
+字段。独立 run 使用 `<dataDirectory>/projects/_standalone/<conversationId>/workspace`，项目
+run 继续使用所选 project root。Migration 011 会重建 conversation foreign-key 边界，并
+保留已有项目会话。
 
 ## 运行与事件
 

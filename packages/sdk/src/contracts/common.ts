@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 export const schemaVersionSchema = z.literal(1);
 export type SchemaVersion = z.infer<typeof schemaVersionSchema>;
-export const runtimeSchemaVersionSchema = z.literal(3);
+export const runtimeSchemaVersionSchema = z.union([z.literal(3), z.literal(4)]);
 export type RuntimeSchemaVersion = z.infer<typeof runtimeSchemaVersionSchema>;
-export const checkpointSchemaVersionSchema = z.literal(4);
+export const checkpointSchemaVersionSchema = z.union([z.literal(4), z.literal(5)]);
 export type CheckpointSchemaVersion = z.infer<typeof checkpointSchemaVersionSchema>;
 
 export const maxExtraSystemPromptLength = 16_384;

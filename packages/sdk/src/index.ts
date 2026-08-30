@@ -79,8 +79,10 @@ export {
 } from './mcp/index.js';
 export type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from './mcp/index.js';
 export { Runner } from './runner.js';
+export { inspectDag } from './runtime/dag-design.js';
 export type {
   AgentRunInput,
+  DagDesignOptions,
   RunnerOptions,
   RunInput,
   RunOptions,
@@ -149,7 +151,13 @@ export type {
   ArtifactState,
   ArtifactStates,
   ArtifactUpload,
+  ArtifactFileManifest,
+  ArtifactFileRef,
   DAGSpec,
+  DagDesignEvent,
+  DagDesignResult,
+  DagDesignSelection,
+  DagDiagnostic,
   DagCondition,
   DagEdge,
   DagNode,

@@ -9,12 +9,11 @@ import { createAgentProfile, profileTitle, type AgentProfile } from './profile.j
 export const BUILTIN_PROFILE_NAMES = [
   'conversation',
   'dag_agent',
+  'dag_design',
   'validator_agent',
   'feedback_learner',
 ] as const;
 export type BuiltinProfileName = (typeof BUILTIN_PROFILE_NAMES)[number];
-
-const builtinRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../resources/profiles');
 
 export class ProfileStore {
   public readonly root: string;
@@ -79,7 +78,7 @@ export class ProfileStore {
 }
 
 export async function loadBuiltinProfile(name: BuiltinProfileName): Promise<AgentProfile> {
-  return new ProfileStore(builtinRoot).load(name);
+  return new ProfileStore(builtinProfileRoot()).load(name);
 }
 
 export function isBuiltinProfileName(name: string): name is BuiltinProfileName {
@@ -110,4 +109,18 @@ function isMissingPathError(error: unknown): boolean {
   return (
     error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
   );
+}
+
+function builtinProfileRoot(): string {
+  const moduleUrl: unknown = import.meta.url;
+  if (typeof moduleUrl === 'string') {
+    return resolve(dirname(fileURLToPath(moduleUrl)), '../../resources/profiles');
+  }
+
+  const resourcesPath = (process as unknown as { readonly resourcesPath?: unknown }).resourcesPath;
+  if (typeof resourcesPath === 'string') {
+    return resolve(resourcesPath, 'profiles');
+  }
+
+  throw new Error('Unable to locate the packaged Dagent agent profiles.');
 }

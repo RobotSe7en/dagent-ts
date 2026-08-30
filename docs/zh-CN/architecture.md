@@ -52,7 +52,7 @@ flowchart LR
   Plan --> Validate["DAG validation"]
   Validate --> Review{"review?"}
   Review -->|approve/not required| Exec
-  Review -->|required| Checkpoint["V4 checkpoint"]
+  Review -->|required| Checkpoint["V5 checkpoint"]
   Tool --> Catalog["CapabilityCatalog"]
   Exec --> Catalog
   Tool --> State["RunState + ConversationState"]
@@ -74,7 +74,7 @@ flowchart LR
 - `CapabilityBinding<TInput, TOutput>` 将 Zod schema、执行函数和边界元数据绑定。
 - `DAGSpec` 是唯一执行图格式。节点支持 capability、agent、subgraph、map 和 bounded
   loop。
-- `RunState` 是 V3 当前状态；V4 `RunCheckpoint` 冻结目标、能力作用域、限制、
+- `RunState` 是 V4 当前状态；V5 `RunCheckpoint` 冻结目标、能力作用域、限制、
   `runtimeDirectory`、初始 `extraSystemPrompt` 和状态。
 - `RunEvent` 是带运行 ID、序号和时间戳的判别联合。
 - `ConversationState` 是 Provider-neutral 的历史记录。
@@ -85,7 +85,7 @@ flowchart LR
 
 - canonical DAG：schema version 1
 - `ConversationState` / `RunState`：V3
-- `ResolvedRunPlan` / `RunCheckpoint`：V4
+- `ResolvedRunPlan` / `RunCheckpoint`：V5
 
 版本号不同是因为这些契约独立演进。Host 不应把它们合并成一个数据库 schema version。
 

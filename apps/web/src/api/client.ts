@@ -3,6 +3,8 @@ import type {
   ConversationState,
   DagAgent,
   DAGSpec,
+  DagDesignEvent,
+  DagDesignResult,
   JsonValue,
   ReviewDecision,
   RunEvent,
@@ -23,7 +25,8 @@ export type Project = {
 
 export type ConversationSummary = {
   readonly id: string;
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly workspaceScope: 'project' | 'standalone';
   readonly title: string;
   readonly kind: 'chat' | 'dynamic-dag' | 'static-dag';
   readonly schemaVersion: 3 | 'legacy';
@@ -371,6 +374,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(graph),
     }),
+  inspectDag: (graph: DAGSpec) =>
+    request<{ readonly diagnostics: DagDesignResult['diagnostics'] }>('/dags/inspect', {
+      method: 'POST',
+      body: JSON.stringify({ graph }),
+    }),
+  designDag: (input: {
+    readonly instruction: string;
+    readonly current?: DAGSpec;
+    readonly selection?: { readonly nodeIds: readonly string[] };
+  }) =>
+    request<{ readonly result: DagDesignResult; readonly events: readonly DagDesignEvent[] }>(
+      '/dags/design',
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   file: (projectId: string, path = '') =>
     request<ProjectFile>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
 };

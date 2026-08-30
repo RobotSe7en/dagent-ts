@@ -63,6 +63,8 @@ runner.resume(checkpoint, decision, options): Promise<RunOutcome>
 runner.resumeStream(checkpoint, decision, options): AsyncIterable<RunEvent>
 runner.cancel(runId, reason?): boolean
 runner.checkpoint(runId): RunCheckpoint | undefined
+runner.inspectDag(spec): readonly DagDiagnostic[]
+runner.designDag(instruction, options?): Promise<DagDesignResult>
 runner.close(): Promise<void>
 ```
 
@@ -95,7 +97,8 @@ const binding = tool({
 });
 ```
 
-`context` contains `runId`, `workspacePath`, an `AbortSignal`, and JSON metadata. Execution
+`context` contains `runId`, `workspacePath`, an `AbortSignal`, JSON metadata, and the resolved Skill
+scope. Execution
 functions should respond to cancellation and process run data only inside `workspacePath`.
 
 `CapabilityCatalog` supports registration, replacement, removal, lookup, and scope filtering.
@@ -140,12 +143,17 @@ options use `{ branch }`; ordinary gates remain a direct condition or `{ conditi
 must use the matching `executionScope` before calling `item()`. Only loop scope supports
 `iteration()`.
 
+`ArtifactRef.files()` returns the deterministic upload-time `ArtifactFileRef` manifest. It does not
+scan the workspace. Static run input accepts `artifactUploads`, bounded to 256 files, 25 MiB per
+file, and 100 MiB total.
+
 ## Public Contracts
 
 The root entry point exports common types:
 
 - conversation: `ConversationState`, `ConversationItem`, `Attachment`, `ContentReference`
-- DAG: `DAGSpec`, `Artifact`, `ArtifactState`
+- DAG: `DAGSpec`, `Artifact`, `ArtifactState`, `ArtifactFileRef`, `ArtifactFileManifest`
+- design: `DagDesignResult`, `DagDesignSelection`, `DagDiagnostic`, `DagDesignEvent`
 - runtime: `RunState`, `RunOutcome`, `RunEvent`, `RunCheckpoint`, `ResolvedRunPlan`
 - review: `PendingReview`, `ReviewDecision`
 - limits: `ExecutionLimits`, `ContextPolicy`, `ResultStoragePolicy`
@@ -194,6 +202,7 @@ properties or configure the corresponding values explicitly in Runner options.
 
 ## Version Notes
 
-0.9.0 uses V3 `ConversationState`/`RunState` and V4
-`ResolvedRunPlan`/`RunCheckpoint`. A checkpoint is a strict resumption contract; do not hand-write,
-trim, or heuristically migrate it across versions.
+0.9.5 uses V3 `ConversationState`, V4 `RunState`, and V5
+`ResolvedRunPlan`/`RunCheckpoint`. A legacy V4 checkpoint with V3 state remains accepted with an
+explicitly empty artifact-file manifest. A checkpoint is a strict resumption contract; do not
+hand-write, trim, or heuristically migrate it across versions.

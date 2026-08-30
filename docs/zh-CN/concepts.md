@@ -83,7 +83,7 @@ V3 `ConversationState` 是多轮历史的唯一权威文档。它保存用户、
 preview 和 provenance；后续节点需要时透明恢复。普通用户 JSON 不会被猜成内部引用。
 
 `RunState` 描述当前执行，`RunOutcome` 描述调用结果，`RunEvent` 描述有序过程。审核暂停时
-由 V4 `RunCheckpoint` 冻结 target、能力定义指纹、限制、工作区运行目录、初始附加系统
+由 V5 `RunCheckpoint` 冻结 target、能力定义指纹、限制、工作区运行目录、初始附加系统
 提示和会话状态。
 
 ## Host

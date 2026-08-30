@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import type { DAGSpec, RunEvent, RunTarget } from 'dagent-ai';
-import { Braces, CheckCircle2, Play, Workflow } from 'lucide-react';
+import { Braces, CheckCircle2, Play, Sparkles, Workflow } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { api } from '../../api/client.js';
@@ -35,6 +35,30 @@ export function DagWorkspace() {
   const [source, setSource] = useState(JSON.stringify(initialGraph, null, 2));
   const [validated, setValidated] = useState<DAGSpec>(initialGraph);
   const [notice, setNotice] = useState('编辑 JSON 后进行校验。');
+  const [instruction, setInstruction] = useState('');
+  const design = useMutation({
+    mutationFn: () =>
+      api.designDag({
+        instruction,
+        current: validated,
+      }),
+    onSuccess: ({ result }) => {
+      if (result.type === 'proposal') {
+        setValidated(result.candidate);
+        setSource(JSON.stringify(result.candidate, null, 2));
+        setNotice(result.summary);
+        return;
+      }
+      if (result.type === 'failure') {
+        setNotice(result.diagnostics.map(({ message }) => message).join('；'));
+        return;
+      }
+      setNotice(result.type === 'answer' ? result.answer : result.summary);
+    },
+    onError: (error) => {
+      setNotice(error instanceof Error ? error.message : String(error));
+    },
+  });
   const validate = useMutation({
     mutationFn: () => api.validateDag(JSON.parse(source) as unknown),
     onSuccess: ({ graph }) => {
@@ -102,6 +126,24 @@ export function DagWorkspace() {
           </button>
         </div>
       </header>
+      <div className="dag-design-bar">
+        <input
+          value={instruction}
+          placeholder="描述要创建或修改的 DAG；这里只设计，不会执行"
+          onChange={(event) => {
+            setInstruction(event.target.value);
+          }}
+        />
+        <button
+          disabled={instruction.trim().length === 0 || design.isPending}
+          onClick={() => {
+            design.mutate();
+          }}
+        >
+          <Sparkles size={15} />
+          {design.isPending ? '设计中…' : '设计 DAG'}
+        </button>
+      </div>
       {review !== undefined && activeRunId !== undefined ? (
         <ReviewBanner
           key={`${review.review.id}:${review.review.revision}`}

@@ -1,0 +1,24 @@
+{
+  "name": "@dagent-ai/desktop-win32-x64",
+  "version": "0.9.5",
+  "description": "DagentWork prebuilt desktop application for Windows x64",
+  "license": "Apache-2.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dagentExecutable": "dist/DagentWork.exe",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

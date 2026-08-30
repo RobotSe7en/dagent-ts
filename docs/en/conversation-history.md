@@ -55,7 +55,7 @@ enter a content-addressed store and can be rebuilt in the next run workspace.
 
 ## Checkpoint and Host Persistence
 
-A V4 review checkpoint stores the complete V3 `conversation`, frozen capability-definition
+A V5 review checkpoint stores the complete V3 `conversation`, frozen capability-definition
 fingerprints, execution limits, runtime directory, initial additional system prompt, and
 `contextUsage`. The host atomically claims a checkpoint once and uses revision compare-and-swap for
 whole-conversation replacement. Duplicate review, changed definitions, or stale conversation
@@ -99,7 +99,7 @@ History required for resumption lives under:
 <run workspace>/<runtimeDirectory>/history/
 ```
 
-V4 checkpoints freeze `runtimeDirectory`, so a Runner configuration change cannot make an older
+V5 checkpoints freeze `runtimeDirectory`, so a Runner configuration change cannot make an older
 run read the wrong resource directory.
 
 ## Public Host Projection

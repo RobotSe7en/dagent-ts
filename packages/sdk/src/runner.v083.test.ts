@@ -15,6 +15,7 @@ import {
   runCheckpointSchema,
 } from './contracts/index.js';
 import { createAgentProfile } from './profiles/profile.js';
+import { sha256 } from './internal/stable-json.js';
 import { Runner } from './runner.js';
 import { MockProvider } from './testing/mock-provider.js';
 
@@ -56,7 +57,7 @@ describe('Runner 0.8.1-0.9.0 contracts', () => {
     },
   );
 
-  it('keeps V3 public state while freezing runtime layout in a V4 checkpoint', async () => {
+  it('uses V4 public state and V5 checkpoints while accepting the V4/V3 legacy pair', async () => {
     const workspace = await temporaryDirectory();
     const provider = new MockProvider([
       { content: 'done', reasoningContent: '', refusal: '', toolCalls: [] },
@@ -77,17 +78,34 @@ describe('Runner 0.8.1-0.9.0 contracts', () => {
 
     const outcome = await runner.run(agent, { prompt: 'hello' });
 
-    expect(outcome.checkpoint.schemaVersion).toBe(4);
+    expect(outcome.checkpoint.schemaVersion).toBe(5);
     expect(outcome.checkpoint.plan).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtimeDirectory: '.private/runtime',
     });
-    expect(outcome.state.schemaVersion).toBe(3);
+    expect(outcome.state.schemaVersion).toBe(4);
     expect(outcome.state.conversation?.schemaVersion).toBe(3);
     await expect(access(join(outcome.state.workspacePath, '.private'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
     expect(() => runCheckpointSchema.parse({ ...outcome.checkpoint, schemaVersion: 3 })).toThrow();
+    const legacyPlanPayload = { ...outcome.checkpoint.plan, schemaVersion: 4 as const };
+    const { fingerprint: _fingerprint, ...legacyPayload } = legacyPlanPayload;
+    expect(_fingerprint).toBe(outcome.checkpoint.plan.fingerprint);
+    const legacy = runCheckpointSchema.parse({
+      ...outcome.checkpoint,
+      schemaVersion: 4,
+      state: {
+        ...outcome.state,
+        schemaVersion: 3,
+        inputArtifactFiles: [],
+      },
+      plan: {
+        ...legacyPayload,
+        fingerprint: sha256(JSON.parse(JSON.stringify(legacyPayload))),
+      },
+    });
+    expect(legacy.state.inputArtifactFiles).toEqual([]);
     expect(
       runCheckpointSchema.parse(JSON.parse(JSON.stringify(outcome.checkpoint)) as unknown).plan
         .extraSystemPrompt,

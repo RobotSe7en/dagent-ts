@@ -78,7 +78,7 @@ history leaves no empty directory tree.
 ## Structured DAG Results
 
 A completed static DAG returns its exact resolved `DAGSpec.output` as `RunOutcome.output`, whether
-the value is a scalar, list, or object. The same value is persisted in `RunState.output` and the V4
+the value is a scalar, list, or object. The same value is persisted in `RunState.output` and the V5
 checkpoint. Non-static runs continue to expose their final answer through the same outcome field.
 
 Condition node results contain `{ branch: string }` and record `selectedBranch` separately, so
@@ -156,6 +156,11 @@ Before resumption, Runner validates:
 The SDK rejects a duplicate decision in the process. The host additionally uses an atomic database
 claim to prevent concurrent or post-restart duplicate consumption. If a reviewed dynamic DAG
 fails and re-plans into another review boundary, the authoritative conversation revision advances.
+
+A reviewable allowed-path violation records normalized `boundaryPaths` in `PendingReview.metadata`.
+Approval authorizes only those paths for later ToolAgent calls in the same run, including after a
+checkpoint continuation. Different paths require review, the authorization is never promoted to
+cross-run policy, and hard workspace escapes cannot be approved.
 
 ## Cancellation
 

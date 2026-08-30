@@ -10,7 +10,7 @@ import type {
   ValueBinding,
   ValueExpression,
 } from './contracts/dag.js';
-import type { Artifact } from './contracts/artifact.js';
+import type { Artifact, ArtifactFileRef as ArtifactFile } from './contracts/artifact.js';
 import { dagSpecSchema } from './contracts/dag.js';
 import { conditionSchema } from './contracts/dag.js';
 import { assertValidDagInScope } from './domain/dag-validation.js';
@@ -34,7 +34,8 @@ export class ValueRef<T = unknown> {
     if (
       expression.type !== 'graph-input' &&
       expression.type !== 'node-output' &&
-      expression.type !== 'item'
+      expression.type !== 'item' &&
+      !(expression.type === 'artifact' && expression.field === 'files')
     ) {
       throw new TypeError(`Expression '${expression.type}' does not support nested paths.`);
     }
@@ -79,15 +80,24 @@ export class ArtifactRef {
   }
 
   public path(): ValueRef<string> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'path' });
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'path', path: [] });
   }
 
   public paths(): ValueRef<readonly string[]> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'paths' });
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'paths', path: [] });
   }
 
   public absolutePath(): ValueRef<string> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'absolutePath' });
+    return new ValueRef({
+      type: 'artifact',
+      artifactId: this.id,
+      field: 'absolutePath',
+      path: [],
+    });
+  }
+
+  public files(): ValueRef<readonly ArtifactFile[]> {
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'files', path: [] });
   }
 }
 

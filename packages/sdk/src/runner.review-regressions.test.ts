@@ -105,6 +105,98 @@ describe('review and execution-scope regressions', () => {
     await runner.close();
   });
 
+  it('suspends and resumes a direct static DAG ToolAgent capability review', async () => {
+    let invocations = 0;
+    const reviewed = stringTool(
+      'tool.static-reviewed',
+      () => {
+        invocations += 1;
+        return 'approved';
+      },
+      'high',
+    );
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-static', name: 'tool.static-reviewed', arguments: {} }],
+      },
+      {
+        content: 'agent complete',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [],
+      },
+    ]);
+    const worker = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'review_worker',
+      name: 'Review worker',
+      scope: { capabilities: ['tool.static-reviewed'] },
+      reviewLevel: 'risky',
+    });
+    const runner = await testRunner(provider, { capabilities: [reviewed], agents: [worker] });
+
+    const pending = await runner.run(defineStaticDag(agentGraph('review_worker')), {});
+
+    expect(pending.status).toBe('awaiting-review');
+    if (pending.status !== 'awaiting-review') return;
+    expect(pending.review.kind).toBe('capability-review');
+    expect(pending.state.staticAgentContinuation).toMatchObject({
+      nodeId: 'delegate',
+      agentId: 'review_worker',
+      invocation: { capabilityId: 'tool.static-reviewed' },
+    });
+
+    const completed = await runner.resume(pending.checkpoint, {
+      reviewId: pending.review.id,
+      revision: pending.review.revision,
+      action: 'approve',
+      reason: '',
+    });
+
+    expect(completed.status).toBe('completed');
+    expect(completed.state.output).toBe('agent complete');
+    expect(completed.state.staticAgentContinuation).toBeUndefined();
+    expect(invocations).toBe(1);
+    await runner.close();
+  });
+
+  it('rejects static agent continuation inside nested DAG constructs', async () => {
+    const worker = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'nested_worker',
+      name: 'Nested worker',
+      scope: {},
+      reviewLevel: 'never',
+    });
+    const nested = agentGraph('nested_worker');
+    const graph: DAGSpec = {
+      schemaVersion: 1,
+      id: 'nested_agent_graph',
+      name: 'Nested agent graph',
+      description: '',
+      nodes: [
+        {
+          id: 'nested',
+          kind: 'subgraph',
+          description: '',
+          graph: nested,
+          input: {},
+          artifactInputs: [],
+          artifactOutputs: [],
+        },
+      ],
+      edges: [],
+      artifacts: {},
+    };
+    const runner = await testRunner(new MockProvider([]), { agents: [worker] });
+
+    await expect(runner.run(defineStaticDag(graph), {})).rejects.toThrow(/direct top-level/u);
+    await runner.close();
+  });
+
   it('adds skipped results for later calls when an earlier call requires review', async () => {
     let reviewedInvocations = 0;
     let laterInvocations = 0;
@@ -218,6 +310,77 @@ describe('review and execution-scope regressions', () => {
         (item) => item.type === 'tool-result' && item.callId === 'call-side-effect',
       ),
     ).toMatchObject({ status: 'completed' });
+    await runner.close();
+  });
+
+  it('reuses an approved boundary path only within the resumed run', async () => {
+    let invocations = 0;
+    const bounded = tool({
+      id: 'tool.bounded-write',
+      input: z.object({ path: z.string() }).strict(),
+      output: z.string(),
+      boundary: { workspaceWrite: true, allowedPaths: ['allowed'] },
+      execute: ({ path }) => {
+        invocations += 1;
+        return path;
+      },
+    });
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [
+          {
+            id: 'call-boundary-1',
+            name: 'tool.bounded-write',
+            arguments: { path: 'blocked/note.txt' },
+          },
+        ],
+      },
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [
+          {
+            id: 'call-boundary-2',
+            name: 'tool.bounded-write',
+            arguments: { path: 'blocked/note.txt' },
+          },
+        ],
+      },
+      { content: 'done', reasoningContent: '', refusal: '', toolCalls: [] },
+    ]);
+    const runner = await testRunner(provider, { capabilities: [bounded] });
+    const agent = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'boundary_agent',
+      name: 'Boundary agent',
+      scope: { capabilities: ['tool.bounded-write'] },
+      reviewLevel: 'never',
+    });
+
+    const first = await runner.run(agent, { prompt: 'write twice' });
+
+    expect(first.status).toBe('awaiting-review');
+    if (first.status !== 'awaiting-review') return;
+    expect(first.review.metadata).toEqual({
+      reason: 'boundary-violation',
+      boundaryPaths: ['blocked/note.txt'],
+      approvedBoundaryPaths: [],
+    });
+    expect(invocations).toBe(0);
+
+    const resumed = await runner.resume(first.checkpoint, {
+      reviewId: first.review.id,
+      revision: first.review.revision,
+      action: 'approve',
+      reason: '',
+    });
+
+    expect(resumed.status).toBe('completed');
+    expect(invocations).toBe(2);
     await runner.close();
   });
 

@@ -23,6 +23,7 @@ Simplified Chinese documentation is available at [docs/zh-CN](../zh-CN/README.md
 | ToolAgent, DagAgent, AutoAgent                            | [Agents](agents.md)                                                          |
 | Built-ins, TypeScript tools, MCP, boundaries              | [Capabilities](capabilities.md)                                              |
 | `DagBuilder`, condition routing, map, subgraph, loop      | [Static DAGs](static-dag.md)                                                 |
+| Design, revise, inspect, or explain a DAG without running | [Non-Executing DAG Design](dag-design.md)                                    |
 | Skill roots, managed installs, Skill capabilities         | [Skills](skills.md)                                                          |
 | Multi-turn state, context, streams, large results, review | [Conversations, Results, Streaming, and Review](results-streaming-review.md) |
 | V3 authoritative history and public projections           | [Conversation History and Context](conversation-history.md)                  |
@@ -37,6 +38,7 @@ Simplified Chinese documentation is available at [docs/zh-CN](../zh-CN/README.md
 | 0.8 host data and request migration             | [SDK 0.8 Host Migration](host-migration-0.8.md) |
 | Version differences and upgrade work            | [Migration Notes](migration.md)                 |
 | Common configuration and runtime failures       | [Troubleshooting](troubleshooting.md)           |
+| Local ToolAgent desktop and security boundary   | [DagentWork Desktop](desktop.md)                |
 
 ## Documentation Conventions
 
