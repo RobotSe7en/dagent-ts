@@ -1,6 +1,15 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { compareSnapshots, type WorkspaceSnapshot } from '../src/main/workspace/scanner.js';
+import {
+  compareSnapshots,
+  scanWorkspace,
+  type WorkspaceSnapshot,
+} from '../src/main/workspace/scanner.js';
 
 describe('workspace changes', () => {
   it('reports deterministic before/after changes without apply semantics', () => {
@@ -27,5 +36,22 @@ describe('workspace changes', () => {
     ]);
     expect(changes.files[2]?.diff).toContain('-one');
     expect(changes.files[2]?.diff).toContain('+two');
+  });
+
+  it('hashes files larger than the diff retention limit without retaining their contents', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dagent-desktop-scan-'));
+    const content = Buffer.alloc(300 * 1024, 7);
+    try {
+      await writeFile(join(root, 'large.bin'), content);
+
+      const snapshot = await scanWorkspace(root);
+
+      expect(snapshot.files.get('large.bin')).toEqual({
+        size: content.byteLength,
+        hash: createHash('sha256').update(content).digest('hex'),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

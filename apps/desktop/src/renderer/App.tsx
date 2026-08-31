@@ -42,6 +42,7 @@ import { invoke } from './api.js';
 import { BrandMark } from './BrandMark.js';
 import { FilePreview } from './FilePreview.js';
 import { ResourcesView } from './ResourcesView.js';
+import { pendingReviewForRun } from './run-events.js';
 
 type MainView = 'work' | 'runs' | 'resources' | 'settings';
 type InspectorTab = 'files' | 'changes' | 'abilities';
@@ -321,7 +322,6 @@ function Workbench({
   const [reviewLevel, setReviewLevel] = useState<ReviewLevel>('risky');
   const [capabilities, setCapabilities] = useState<Set<string>>(new Set());
   const [skills, setSkills] = useState<Set<string>>(new Set());
-  const [agents, setAgents] = useState<Set<string>>(new Set());
   const [optimisticPrompt, setOptimisticPrompt] = useState('');
   const project = data.projects.find(({ id }) => id === projectId);
 
@@ -363,7 +363,7 @@ function Workbench({
         prompt: content,
         capabilityIds: [...capabilities],
         skillIds: [...skills],
-        agentIds: [...agents],
+        agentIds: [],
         attachmentGrantIds: attachments.map(({ grantId }) => grantId),
         reviewLevel,
       });
@@ -378,7 +378,11 @@ function Workbench({
       setOptimisticPrompt('');
     }
   }
-  const pendingReview = latestReview(liveEvents) ?? selectedRun?.checkpoint?.state.pendingReview;
+  const pendingReview = pendingReviewForRun(
+    selectedRun?.status,
+    selectedRun?.checkpoint?.state.pendingReview,
+    liveEvents,
+  );
   const timelineItems =
     conversation?.conversation?.items.filter((item) => item.visibility === 'user') ?? [];
   const tokenEvents = liveEvents.filter(
@@ -392,9 +396,14 @@ function Workbench({
     .filter((event) => event.channel === 'reasoning')
     .map((event) => event.content)
     .join('');
+  const latestCompletionIndex = liveEvents.findLastIndex((event) => event.type === 'run-completed');
+  const latestCompletion = liveEvents[latestCompletionIndex];
+  const terminalEvent =
+    latestCompletion?.type === 'run-completed' && latestCompletion.outcome !== 'awaiting-review';
   const active =
-    (liveEvents.length > 0 && !liveEvents.some((event) => event.type === 'run-completed')) ||
-    ['pending', 'planning', 'running', 'resuming'].includes(selectedRun?.status ?? '');
+    !terminalEvent &&
+    ((liveEvents.length > 0 && latestCompletionIndex < liveEvents.length - 1) ||
+      ['pending', 'planning', 'running', 'resuming'].includes(selectedRun?.status ?? ''));
   return (
     <div className="workbench">
       <section className="conversation-pane">
@@ -442,7 +451,7 @@ function Workbench({
               <p>{optimisticPrompt}</p>
             </div>
           )}
-          {(active || liveContent.length > 0 || liveReasoning.length > 0) && (
+          {active && (
             <AssistantProcess events={liveEvents} content={liveContent} reasoning={liveReasoning} />
           )}
           {pendingReview !== undefined && (
@@ -576,10 +585,8 @@ function Workbench({
             resources={data.resources}
             capabilities={capabilities}
             skills={skills}
-            agents={agents}
             setCapabilities={setCapabilities}
             setSkills={setSkills}
-            setAgents={setAgents}
           />
         )}
       </aside>
@@ -850,18 +857,14 @@ function Abilities({
   resources,
   capabilities,
   skills,
-  agents,
   setCapabilities,
   setSkills,
-  setAgents,
 }: {
   readonly resources: DesktopResources;
   readonly capabilities: Set<string>;
   readonly skills: Set<string>;
-  readonly agents: Set<string>;
   readonly setCapabilities: (value: Set<string>) => void;
   readonly setSkills: (value: Set<string>) => void;
-  readonly setAgents: (value: Set<string>) => void;
 }) {
   return (
     <div className="abilities">
@@ -885,16 +888,6 @@ function Abilities({
         }))}
         selected={skills}
         setSelected={setSkills}
-      />
-      <AbilityGroup
-        title="ToolAgents"
-        items={resources.agents.map((item) => ({
-          id: item.config.id,
-          label: item.config.name,
-          detail: item.config.description,
-        }))}
-        selected={agents}
-        setSelected={setAgents}
       />
     </div>
   );
@@ -1036,9 +1029,6 @@ function InspectorEmpty({
       <p>{text}</p>
     </div>
   );
-}
-function latestReview(events: readonly RunEvent[]) {
-  return [...events].reverse().find((event) => event.type === 'review-required')?.review;
 }
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;

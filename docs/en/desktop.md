@@ -26,8 +26,9 @@ pnpm --filter @dagent/desktop-host dev
 ## Product Boundary
 
 Desktop creates a fixed ToolAgent target in the trusted main process. The renderer can select its
-capabilities, Skills, nested ToolAgents, and review level, but cannot replace that target. Desktop
-does not expose DagAgent, AutoAgent, static DAGs, saved DAGs, DAG execution, DAG Studio, enterprise
+capabilities, Skills, and review level, but cannot replace that target. Saved ToolAgents remain
+manageable resources; direct desktop tasks do not expose them as callable delegates. Desktop does
+not expose DagAgent, AutoAgent, static DAGs, saved DAGs, DAG execution, DAG Studio, enterprise
 connections, authentication, accounts, workspaces, RBAC, cloud exchange, or change apply/rollback.
 
 Project tasks run in a directory selected through the native folder dialog. Standalone tasks use a

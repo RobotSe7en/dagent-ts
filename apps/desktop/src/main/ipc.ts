@@ -105,9 +105,20 @@ export function registerDesktopIpc(runtime: ApplicationRuntime): () => void {
         return startRun(request, event);
       case 'run:cancel':
         return { cancelled: runtime.runs.cancel(request.runId) };
-      case 'run:review':
-        await runtime.runs.resume(request.runId, request.decision);
-        return { resumed: true };
+      case 'run:review': {
+        const subscribed = !runSubscriptions.has(request.runId);
+        if (subscribed) subscribeToRun(request.runId, event);
+        try {
+          await runtime.runs.resume(request.runId, request.decision);
+          return { resumed: true };
+        } catch (error) {
+          if (subscribed) {
+            runSubscriptions.get(request.runId)?.();
+            runSubscriptions.delete(request.runId);
+          }
+          throw error;
+        }
+      }
       case 'run:events':
         return { events: await runtime.runs.eventsAfter(request.runId, request.after) };
       case 'file:inspect':
@@ -230,12 +241,8 @@ export function registerDesktopIpc(runtime: ApplicationRuntime): () => void {
     for (const id of skills) {
       if (!availableSkills.has(id)) throw new Error(`Skill '${id}' is unavailable.`);
     }
-    const agents = unique(request.agentIds);
-    for (const id of agents) {
-      const agent = runtime.runner.agent(id);
-      if (agent === undefined || agent.kind !== 'tool-agent') {
-        throw new Error(`ToolAgent '${id}' is unavailable.`);
-      }
+    if (request.agentIds.length > 0) {
+      throw new Error('Direct desktop ToolAgent runs do not support ToolAgent delegates.');
     }
     const uploads = [];
     let totalBytes = 0;
@@ -261,7 +268,7 @@ export function registerDesktopIpc(runtime: ApplicationRuntime): () => void {
       description: 'Local desktop coding and knowledge-work agent.',
       systemPrompt:
         'Work directly in the selected local project. Be precise, preserve unrelated changes, and explain the result clearly.',
-      scope: { capabilities: [...capabilities], skills: [...skills], agents: [...agents] },
+      scope: { capabilities: [...capabilities], skills: [...skills] },
       reviewLevel: request.reviewLevel,
       maxSteps: 50,
     });

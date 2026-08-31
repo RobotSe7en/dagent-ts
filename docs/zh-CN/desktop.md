@@ -26,9 +26,10 @@ pnpm --filter @dagent/desktop-host dev
 ## 产品边界
 
 桌面端在可信 Main Process 中构造固定的 ToolAgent target。Renderer 可以选择 capabilities、
-Skills、嵌套 ToolAgents 和 review level，但不能替换 target。桌面端不暴露 DagAgent、
-AutoAgent、静态 DAG、已保存 DAG、DAG 执行、DAG Studio、企业连接、认证、账号、工作区、
-RBAC、云交换或变更 apply/rollback。
+Skills 和 review level，但不能替换 target。已保存 ToolAgent 仍可作为资源管理；桌面端直接
+任务不会把它们暴露为可调用委派。桌面端不暴露 DagAgent、AutoAgent、静态 DAG、已保存
+DAG、DAG 执行、DAG Studio、企业连接、认证、账号、工作区、RBAC、云交换或变更
+apply/rollback。
 
 项目任务在原生目录对话框授权的目录中运行；独立任务使用托管的临时工作区。会话以
 `workspaceScope` 区分 `project` 与 `standalone`，独立会话没有 `projectId`。

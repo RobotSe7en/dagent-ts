@@ -12,6 +12,7 @@ import {
   artifactStatesSchema,
   conversationStateSchema,
   contextPolicySchema,
+  createInvocationId,
   createRunId,
   createReviewId,
   dagNodeResultSchema,
@@ -89,6 +90,7 @@ import {
   resolvedAgentsForPlan,
   validateResolvedExecutionScope,
 } from './runtime/execution-scope.js';
+import { externalizeJsonValue } from './runtime/result-storage.js';
 import { ToolAgentRuntime } from './runtime/tool-agent.js';
 import type { AgentLoopResult, RuntimeExecutionContext } from './runtime/types.js';
 import { createSkillCapabilities, SkillStore } from './skills/index.js';
@@ -488,7 +490,20 @@ export class Runner implements AsyncDisposable {
           );
         }
         if (target.kind === 'static-dag') {
-          return this.#resumeStaticAgent(checkpoint.state, checkpoint.plan, decision, context);
+          failureState = runStateSchema.parse({
+            ...checkpoint.state,
+            status: 'running',
+            pendingReview: undefined,
+            staticAgentContinuation: undefined,
+            revision: checkpoint.state.revision + 1,
+            updatedAt: nowTimestamp(),
+          });
+          return await this.#resumeStaticAgent(
+            checkpoint.state,
+            checkpoint.plan,
+            decision,
+            context,
+          );
         }
         const agent = capabilityResumeAgent(target);
         const runtime = new ToolAgentRuntime();
@@ -990,11 +1005,22 @@ export class Runner implements AsyncDisposable {
         ),
       );
     }
+    const stored = await externalizeJsonValue(result.output, {
+      workspacePath: context.workspacePath,
+      runtimeDirectory: context.runtimeDirectory,
+      key: `node-${continuation.nodeId}-${createInvocationId()}`,
+      policy: context.resultStoragePolicy,
+    });
     const nodeResult = dagNodeResultSchema.parse({
       nodeId: continuation.nodeId,
       status: 'completed',
-      output: result.output,
-      content: result.output,
+      output: stored.value,
+      ...(stored.reference === undefined
+        ? {}
+        : { valueReference: stored.reference, references: [stored.reference] }),
+      content:
+        stored.reference?.preview ??
+        (typeof result.output === 'string' ? result.output : JSON.stringify(result.output)),
       completedAt: nowTimestamp(),
     });
     const executing = runStateSchema.parse({

@@ -106,7 +106,11 @@ export class ToolAgentRuntime {
         agent.scope.skills.length === 0
           ? []
           : (await context.skills.list())
-              .filter((skill) => agent.scope.skills.includes(skill.qualifiedName))
+              .filter(
+                (skill) =>
+                  agent.scope.skills.includes(skill.name) ||
+                  agent.scope.skills.includes(skill.qualifiedName),
+              )
               .map((skill) => ({ name: skill.qualifiedName, description: skill.description }));
 
       if (resume !== undefined) {

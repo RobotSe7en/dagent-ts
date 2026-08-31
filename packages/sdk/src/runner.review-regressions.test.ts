@@ -163,6 +163,101 @@ describe('review and execution-scope regressions', () => {
     await runner.close();
   });
 
+  it('finalizes a failed resumed static agent and clears its continuation', async () => {
+    const reviewed = stringTool('tool.static-failure', () => 'approved', 'high');
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-static-failure', name: 'tool.static-failure', arguments: {} }],
+      },
+      () => {
+        throw new Error('provider unavailable after review');
+      },
+    ]);
+    const worker = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'failing_review_worker',
+      name: 'Failing review worker',
+      scope: { capabilities: ['tool.static-failure'] },
+      reviewLevel: 'risky',
+    });
+    const runner = await testRunner(provider, { capabilities: [reviewed], agents: [worker] });
+    const pending = await runner.run(defineStaticDag(agentGraph(worker.id)), {});
+    expect(pending.status).toBe('awaiting-review');
+    if (pending.status !== 'awaiting-review') return;
+
+    const events = [];
+    for await (const event of runner.resumeStream(pending.checkpoint, {
+      reviewId: pending.review.id,
+      revision: pending.review.revision,
+      action: 'approve',
+      reason: '',
+    })) {
+      events.push(event);
+    }
+
+    const checkpoint = events.findLast((event) => event.type === 'checkpoint');
+    expect(checkpoint).toMatchObject({
+      type: 'checkpoint',
+      checkpoint: {
+        state: {
+          status: 'failed',
+          pendingReview: undefined,
+          staticAgentContinuation: undefined,
+        },
+      },
+    });
+    expect(events.at(-1)).toMatchObject({ type: 'run-completed', outcome: 'failed' });
+    await runner.close();
+  });
+
+  it('externalizes a resumed static agent node output under the resolved storage policy', async () => {
+    const reviewed = stringTool('tool.static-storage', () => 'approved', 'high');
+    const output = 'x'.repeat(5_000);
+    const provider = new MockProvider([
+      {
+        content: '',
+        reasoningContent: '',
+        refusal: '',
+        toolCalls: [{ id: 'call-static-storage', name: 'tool.static-storage', arguments: {} }],
+      },
+      { content: output, reasoningContent: '', refusal: '', toolCalls: [] },
+    ]);
+    const worker = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'stored_review_worker',
+      name: 'Stored review worker',
+      scope: { capabilities: ['tool.static-storage'] },
+      reviewLevel: 'risky',
+    });
+    const runner = await testRunner(provider, {
+      capabilities: [reviewed],
+      agents: [worker],
+      resultStorage: { maxInlineBytes: 1_024 },
+    });
+    const pending = await runner.run(defineStaticDag(agentGraph(worker.id)), {});
+    expect(pending.status).toBe('awaiting-review');
+    if (pending.status !== 'awaiting-review') return;
+
+    const completed = await runner.resume(pending.checkpoint, {
+      reviewId: pending.review.id,
+      revision: pending.review.revision,
+      action: 'approve',
+      reason: '',
+    });
+
+    expect(completed.status).toBe('completed');
+    expect(completed.state.output).toBe(output);
+    expect(completed.state.nodeResults['delegate']).toMatchObject({
+      output: { type: 'dagent_content_reference' },
+      valueReference: { type: 'dagent_content_reference' },
+    });
+    expect(JSON.stringify(completed.state.nodeResults['delegate'])).not.toContain(output);
+    await runner.close();
+  });
+
   it('rejects static agent continuation inside nested DAG constructs', async () => {
     const worker = defineToolAgent({
       kind: 'tool-agent',
@@ -437,6 +532,31 @@ describe('review and execution-scope regressions', () => {
     await runner.close();
   });
 
+  it('advertises a uniquely scoped categorized skill selected by short name', async () => {
+    const provider = new MockProvider([
+      { content: 'done', reasoningContent: '', refusal: '', toolCalls: [] },
+    ]);
+    const runner = await testRunner(provider);
+    await runner.skills.installMarkdown(
+      '---\nname: concise\ndescription: Be concise.\ncategory: writing\n---\n\nKeep answers short.',
+    );
+    const agent = defineToolAgent({
+      kind: 'tool-agent',
+      id: 'short_skill_agent',
+      name: 'Short skill agent',
+      scope: { skills: ['concise'] },
+      reviewLevel: 'never',
+    });
+
+    const outcome = await runner.run(agent, { prompt: 'answer briefly' });
+
+    expect(outcome.status).toBe('completed');
+    expect(provider.requests[0]?.messages[0]?.content).toContain(
+      '["writing/concise","Be concise."]',
+    );
+    await runner.close();
+  });
+
   it('reruns explicitly selected completed nodes and their downstream nodes', async () => {
     let sourceInvocations = 0;
     let sinkInvocations = 0;
@@ -587,7 +707,10 @@ function planReply(graph: DAGSpec) {
 
 async function testRunner(
   provider: MockProvider,
-  options: Pick<ConstructorParameters<typeof Runner>[0], 'capabilities' | 'agents'> = {},
+  options: Pick<
+    ConstructorParameters<typeof Runner>[0],
+    'capabilities' | 'agents' | 'resultStorage'
+  > = {},
 ): Promise<Runner> {
   const workspace = await mkdtemp(join(tmpdir(), 'dagent-review-regression-'));
   temporaryDirectories.push(workspace);
@@ -595,6 +718,7 @@ async function testRunner(
     provider,
     workspace,
     runtimeDirectory: '.runtime',
+    managedSkillRoot: join(workspace, 'managed-skills'),
     ...options,
   });
 }

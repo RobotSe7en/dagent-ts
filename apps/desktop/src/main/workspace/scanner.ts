@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import { createTwoFilesPatch } from 'diff';
 
@@ -45,18 +47,19 @@ export async function scanWorkspace(root: string): Promise<WorkspaceSnapshot> {
       }
       if (!entry.isFile()) continue;
       const info = await lstat(target);
-      const bytes = await readFile(target);
+      const retainContent =
+        info.size <= maxContentFileBytes && contentBytes + info.size <= maxContentTotalBytes;
+      const bytes = retainContent ? await readFile(target) : undefined;
       const path = relative(root, target).split('\\').join('/');
       const content =
-        info.size <= maxContentFileBytes &&
-        contentBytes + info.size <= maxContentTotalBytes &&
-        !bytes.includes(0)
-          ? bytes.toString('utf8')
-          : undefined;
+        bytes !== undefined && !bytes.includes(0) ? bytes.toString('utf8') : undefined;
       if (content !== undefined) contentBytes += info.size;
       files.set(path, {
         size: info.size,
-        hash: createHash('sha256').update(bytes).digest('hex'),
+        hash:
+          bytes === undefined
+            ? await hashFile(target)
+            : createHash('sha256').update(bytes).digest('hex'),
         ...(content === undefined ? {} : { content }),
       });
     }
@@ -64,6 +67,12 @@ export async function scanWorkspace(root: string): Promise<WorkspaceSnapshot> {
 
   await visit(root);
   return { files, truncated };
+}
+
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
 }
 
 export function compareSnapshots(

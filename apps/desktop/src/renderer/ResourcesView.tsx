@@ -469,7 +469,7 @@ function Agents(props: ResourceProps) {
       <div className="resource-heading">
         <div>
           <h2>ToolAgents</h2>
-          <p>可由当前桌面 ToolAgent 调用的专用子代理；不包含 DagAgent 或 AutoAgent。</p>
+          <p>可复用的专用代理配置；当前桌面直接任务不会把它们作为可调用工具。</p>
         </div>
         <button className="primary-small" onClick={() => setShowForm(!showForm)}>
           <Plus size={15} />

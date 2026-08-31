@@ -272,7 +272,7 @@ describe('Runner static DAG artifacts', () => {
       id: 'manifest_files',
       name: 'Manifest files',
       artifacts: {
-        source: { id: 'source', paths: ['inputs/source/'], required: false },
+        source: { id: 'source', paths: ['inputs/source'], required: false },
       },
       nodes: [
         {

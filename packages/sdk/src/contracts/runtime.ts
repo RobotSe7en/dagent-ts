@@ -357,8 +357,9 @@ export const runCheckpointSchema = z
 export type RunCheckpoint = z.infer<typeof runCheckpointSchema>;
 
 function artifactDeclaresFile(declaredPath: string, filePath: string): boolean {
-  const normalized = declaredPath.replaceAll('\\', '/');
-  return normalized.endsWith('/') ? filePath.startsWith(normalized) : filePath === normalized;
+  const normalized = declaredPath.replaceAll('\\', '/').replace(/\/+$/u, '');
+  const normalizedFile = filePath.replaceAll('\\', '/');
+  return normalizedFile === normalized || normalizedFile.startsWith(`${normalized}/`);
 }
 
 const eventBaseShape = {
