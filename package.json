@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm -r --if-present build",
     "clean": "pnpm -r --if-present clean",
+    "dagent-work:dev": "pnpm --filter @dagent/work dev",
     "dev": "pnpm --filter dagent-ai-app dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

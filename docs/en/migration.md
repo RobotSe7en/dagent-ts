@@ -33,7 +33,8 @@ observed changes. It deliberately omits every DAG and enterprise surface. See
 [DagentWork Desktop](desktop.md).
 
 The public desktop launcher package and executable are both named `dagent-work`. The earlier
-unpublished `dagent-ai-desktop`/`dagent-desktop` names are not retained as aliases.
+unpublished `dagent-ai-desktop`/`dagent-desktop` names are not retained as aliases. In the source
+workspace, the private Electron package is `@dagent/work`; start it with `pnpm dagent-work:dev`.
 
 ## 0.9.4
 

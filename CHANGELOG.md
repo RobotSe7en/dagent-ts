@@ -11,6 +11,8 @@
   resources, isolated SQLite state, and no DAG or enterprise surfaces.
 - Added the `dagent-work` launcher and six optional native payload packages for macOS, Linux,
   and Windows on x64 and arm64, plus a matrix release workflow.
+- Named the private Electron workspace package `@dagent/work` and added `pnpm dagent-work:dev` as
+  the source-development entrypoint.
 - Fixed reviewed static ToolAgent resume finalization and result externalization, directory-mode
   artifact manifests, and short-name Skill routing indexes.
 - Fixed DagentWork persisted-review subscriptions, stale review/live-output rendering, and bounded
