@@ -7,12 +7,12 @@ review risky calls, inspect files, and see the changes observed during a run.
 ## Install and Run
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 The launcher selects one optional native package for the current platform. The released matrix is
-macOS, Linux, and Windows on x64 and arm64. `dagent-desktop --version` prints the launcher version.
+macOS, Linux, and Windows on x64 and arm64. `dagent-work --version` prints the launcher version.
 
 For source development:
 

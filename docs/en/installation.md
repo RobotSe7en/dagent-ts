@@ -42,8 +42,8 @@ proxy. The host itself is designed as a local single-user application.
 ## Install DagentWork Desktop
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 The small launcher depends optionally on exactly one native payload for the current platform:

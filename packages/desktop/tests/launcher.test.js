@@ -8,7 +8,7 @@ import { resolveLinuxSandbox } from '../lib/linux-sandbox.js';
 test('launcher reports its package version without loading a platform binary', () => {
   const output = execFileSync(
     process.execPath,
-    [resolve(import.meta.dirname, '../bin/dagent-desktop.js'), '--version'],
+    [resolve(import.meta.dirname, '../bin/dagent-work.js'), '--version'],
     {
       encoding: 'utf8',
     },

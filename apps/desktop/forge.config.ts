@@ -30,7 +30,7 @@ const config: ForgeConfig = {
       platforms: ['linux'],
       config: {
         options: {
-          name: 'dagent-desktop',
+          name: 'dagent-work',
           bin: 'DagentWork',
           productName: 'DagentWork',
           categories: ['Utility', 'Development'],
