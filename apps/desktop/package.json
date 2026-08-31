@@ -1,8 +1,8 @@
 {
-  "name": "@dagent/desktop-host",
+  "name": "@dagent/work",
   "productName": "DagentWork",
   "version": "0.9.5",
-  "description": "Private build host for the local-first DagentWork desktop application",
+  "description": "Private Electron application for the local-first DagentWork desktop",
   "license": "Apache-2.0",
   "type": "module",
   "main": ".vite/build/main.cjs",

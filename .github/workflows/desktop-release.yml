@@ -47,7 +47,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter dagent-ai build
       - run: pnpm --filter dagent-ai-app build
-      - run: pnpm --filter @dagent/desktop-host package
+      - run: pnpm --filter @dagent/work package
       - run: node apps/desktop/scripts/stage-platform.mjs ${{ matrix.platform }} ${{ matrix.arch }}
       - name: Archive platform payload
         shell: bash

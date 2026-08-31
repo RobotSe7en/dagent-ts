@@ -20,7 +20,7 @@ For source development:
 pnpm install
 pnpm --filter dagent-ai build
 pnpm --filter dagent-ai-app build
-pnpm --filter @dagent/desktop-host dev
+pnpm dagent-work:dev
 ```
 
 ## Product Boundary

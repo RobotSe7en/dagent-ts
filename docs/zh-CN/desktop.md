@@ -20,7 +20,7 @@ Launcher 会按当前平台选择一个可选原生包。发布矩阵覆盖 macO
 pnpm install
 pnpm --filter dagent-ai build
 pnpm --filter dagent-ai-app build
-pnpm --filter @dagent/desktop-host dev
+pnpm dagent-work:dev
 ```
 
 ## 产品边界
