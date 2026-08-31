@@ -29,6 +29,9 @@ TypeScript workspace 同时新增 DagentWork 本地桌面端。它拥有独立 S
 工作区，只暴露 ToolAgent 执行、本地资源、审核、文件与观察到的变化，并明确移除全部 DAG
 与企业版界面。详见 [DagentWork 桌面端](desktop.md)。
 
+桌面 Launcher 的公开 npm 包名与可执行命令统一为 `dagent-work`。此前未发布的
+`dagent-ai-desktop`/`dagent-desktop` 名称不保留兼容别名。
+
 ## 0.9.4
 
 `runner.designDag()` 返回 proposal/no-change/answer/failure 判别联合，`runner.inspectDag()`

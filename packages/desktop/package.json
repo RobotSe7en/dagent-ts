@@ -1,11 +1,11 @@
 {
-  "name": "dagent-ai-desktop",
+  "name": "dagent-work",
   "version": "0.9.5",
   "description": "Cross-platform launcher for the local-first DagentWork desktop application",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "dagent-desktop": "./bin/dagent-desktop.js"
+    "dagent-work": "./bin/dagent-work.js"
   },
   "files": [
     "bin",

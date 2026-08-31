@@ -27,7 +27,7 @@ try {
   manifestPath = require.resolve(`${packageName}/package.json`);
 } catch {
   fail(
-    `The optional prebuilt package ${packageName} is missing. Reinstall dagent-ai-desktop with optional dependencies enabled.`,
+    `The optional prebuilt package ${packageName} is missing. Reinstall dagent-work with optional dependencies enabled.`,
   );
 }
 

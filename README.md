@@ -117,8 +117,8 @@ variables, and data-directory behavior.
 ### Start DagentWork desktop
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 The launcher installs the native package for the current macOS, Linux, or Windows x64/arm64

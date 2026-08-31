@@ -7,12 +7,12 @@ DagentWork 是 Dagent TypeScript 的本地优先桌面界面，专注 ToolAgent 
 ## 安装与启动
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 Launcher 会按当前平台选择一个可选原生包。发布矩阵覆盖 macOS、Linux、Windows 的 x64
-和 arm64；`dagent-desktop --version` 输出 Launcher 版本。
+和 arm64；`dagent-work --version` 输出 Launcher 版本。
 
 从源码开发：
 

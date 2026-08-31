@@ -32,6 +32,9 @@ standalone workspaces and exposes only ToolAgent execution, local resources, rev
 observed changes. It deliberately omits every DAG and enterprise surface. See
 [DagentWork Desktop](desktop.md).
 
+The public desktop launcher package and executable are both named `dagent-work`. The earlier
+unpublished `dagent-ai-desktop`/`dagent-desktop` names are not retained as aliases.
+
 ## 0.9.4
 
 `runner.designDag()` returns a discriminated proposal/no-change/answer/failure result, and

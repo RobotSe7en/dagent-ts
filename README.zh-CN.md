@@ -114,8 +114,8 @@ node packages/app/dist/cli.js serve --config ./examples/dagent.yaml
 ### 启动 DagentWork 桌面端
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 Launcher 会安装当前 macOS、Linux 或 Windows x64/arm64 平台对应的原生包。桌面数据与

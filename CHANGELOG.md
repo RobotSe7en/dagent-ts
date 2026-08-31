@@ -9,7 +9,7 @@
 - Added DagentWork, a secured local-first Electron ToolAgent workbench with project/standalone
   conversations, review, file previews, observed before/after changes, model/MCP/Skill/ToolAgent
   resources, isolated SQLite state, and no DAG or enterprise surfaces.
-- Added the `dagent-ai-desktop` launcher and six optional native payload packages for macOS, Linux,
+- Added the `dagent-work` launcher and six optional native payload packages for macOS, Linux,
   and Windows on x64 and arm64, plus a matrix release workflow.
 - Fixed reviewed static ToolAgent resume finalization and result externalization, directory-mode
   artifact manifests, and short-name Skill routing indexes.

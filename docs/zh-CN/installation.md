@@ -40,8 +40,8 @@ dagent serve --config ./dagent.yaml
 ## 安装 DagentWork 桌面端
 
 ```bash
-npm install -g dagent-ai-desktop
-dagent-desktop
+npm install -g dagent-work
+dagent-work
 ```
 
 轻量 Launcher 会按当前平台可选安装一个原生载荷，支持 macOS、Linux、Windows 的 x64
