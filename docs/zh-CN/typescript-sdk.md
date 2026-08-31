@@ -63,11 +63,14 @@ runner.resume(checkpoint, decision, options): Promise<RunOutcome>
 runner.resumeStream(checkpoint, decision, options): AsyncIterable<RunEvent>
 runner.cancel(runId, reason?): boolean
 runner.checkpoint(runId): RunCheckpoint | undefined
+runner.inspectDag(spec): readonly DagDiagnostic[]
+runner.designDag(instruction, options?): Promise<DagDesignResult>
 runner.close(): Promise<void>
 ```
 
-Runner 实现 `AsyncDisposable`，Node.js 24 可使用 `await using`。`workspace` 和
-`runtimeDirectory` 是必填 host 选择；不要让 SDK 默认为当前目录中的隐藏路径。
+Runner 实现 `AsyncDisposable`，Node.js 24 可使用 `await using`。默认值是
+`workspace=~/.dagent` 与 `runtimeDirectory=.runtime`；负责持久化的 Host 仍应显式传入
+两者。
 
 ## Agent factories
 
@@ -94,7 +97,8 @@ const binding = tool({
 });
 ```
 
-`context` 包含 `runId`、`workspacePath`、`AbortSignal` 和 JSON metadata。执行函数应响应
+`context` 包含 `runId`、`workspacePath`、`AbortSignal`、JSON metadata 与解析后的 Skill
+scope。执行函数应响应
 取消信号，且只在 `workspacePath` 内处理本次运行的数据。
 
 `CapabilityCatalog` 支持 register、replace、unregister、lookup 与 scope 过滤。重复注册
@@ -125,20 +129,28 @@ builder.agent(agentId, prompt, options)
 builder.subgraph(graph, input, options)
 builder.map(items, graph, options)
 builder.loop(graph, input, until, options)
-builder.addEdge(from, to, condition?)
+builder.condition(cases, defaultBranch, options)
+builder.addEdge(from, to, conditionOrOptions?)
 builder.setOutput(value)
 builder.build()
 ```
 
+`allOf(...)`、`anyOf(...)` 与 `notCondition(...)` 用于组合可复用条件。Branch edge options
+使用 `{ branch }`；普通 gate 仍可直接传 condition 或 `{ condition }`。
+
 `NodeRef<T>.output()` 与 `ValueRef<T>.at()` 保留类型关系。map/loop 子图必须使用对应
 `executionScope` 才能调用 `item()`；只有 loop scope 可以调用 `iteration()`。
+
+`ArtifactRef.files()` 返回确定的上传时 `ArtifactFileRef` 清单，不扫描工作区。静态 run
+input 接受 `artifactUploads`，上限为 256 个文件、单文件 25 MiB、总量 100 MiB。
 
 ## 公开契约
 
 根入口导出常用类型：
 
 - 会话：`ConversationState`、`ConversationItem`、`Attachment`、`ContentReference`
-- DAG：`DAGSpec`、`Artifact`、`ArtifactState`
+- DAG：`DAGSpec`、`Artifact`、`ArtifactState`、`ArtifactFileRef`、`ArtifactFileManifest`
+- 设计：`DagDesignResult`、`DagDesignSelection`、`DagDiagnostic`、`DagDesignEvent`
 - 运行：`RunState`、`RunOutcome`、`RunEvent`、`RunCheckpoint`、`ResolvedRunPlan`
 - 审核：`PendingReview`、`ReviewDecision`
 - 限制：`ExecutionLimits`、`ContextPolicy`、`ResultStoragePolicy`
@@ -185,6 +197,6 @@ Provider adapter 只负责传输和模型协议。对话压缩、能力 scope、
 
 ## 版本说明
 
-0.8.3 使用 V3 `ConversationState`/`RunState` 与 V4
-`ResolvedRunPlan`/`RunCheckpoint`。checkpoint 是严格恢复契约，不应手写、裁剪或跨版本
-猜测迁移。
+0.9.5 使用 V3 `ConversationState`、V4 `RunState` 与 V5
+`ResolvedRunPlan`/`RunCheckpoint`。包含 V3 state 的旧 V4 checkpoint 仍可读取，并具有
+明确的空 artifact-file 清单。checkpoint 是严格恢复契约，不应手写、裁剪或跨版本猜测迁移。

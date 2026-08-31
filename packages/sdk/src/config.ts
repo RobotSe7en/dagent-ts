@@ -118,8 +118,8 @@ export async function createRunnerFromConfigFile(
   pathValue: string,
   options: {
     readonly provider: ChatProvider;
-    readonly workspace: string;
-    readonly runtimeDirectory: string;
+    readonly workspace?: string;
+    readonly runtimeDirectory?: string;
     readonly extraSystemPrompt?: string;
     readonly capabilities?: readonly CapabilityBinding[];
   },
@@ -159,8 +159,10 @@ export async function createRunnerFromConfigFile(
     provider: options.provider,
     capabilities: [...builtins, ...moduleCapabilities, ...(options.capabilities ?? [])],
     agents: config.agents,
-    workspace: resolve(options.workspace),
-    runtimeDirectory: options.runtimeDirectory,
+    ...(options.workspace === undefined ? {} : { workspace: resolve(options.workspace) }),
+    ...(options.runtimeDirectory === undefined
+      ? {}
+      : { runtimeDirectory: options.runtimeDirectory }),
     ...(options.extraSystemPrompt === undefined
       ? {}
       : { extraSystemPrompt: options.extraSystemPrompt }),

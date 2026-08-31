@@ -247,8 +247,10 @@ function plannerSystemPrompt(
     dynamicSections: [
       `Create a canonical DAGSpec that solves the user's request. Use only listed capability ids.
 Every node-output reference must have an explicit upstream edge. Use bounded map, subgraph,
-or loop nodes for control flow. Never output source code. Return only the structured object
-matching the supplied JSON Schema.
+or loop nodes for bounded control flow. Use condition nodes with ordered cases and branch edges
+for mutually exclusive routing; keep edge conditions for independent gates. A branch edge must
+start at a condition node and cannot also have a condition. Never output source code. Return only
+the structured object matching the supplied JSON Schema.
 
 Capabilities:
 ${capabilityLines.join('\n')}

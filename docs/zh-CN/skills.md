@@ -77,6 +77,11 @@ const reviewer = defineToolAgent({
 `scope.skills` 限制 SkillStore capability 对本次 Agent 可见的名称。可以写 qualified name，
 也可以在不歧义时使用短名称。Skill scope 不会自动授予文件、shell 或网络工具。
 
+ToolAgent system prompt 会包含最终 scope 的确定性路由索引。排序后的名称/description 条目
+使用 8,000 字符预算，之后仅名称条目另用 2,000 字符预算；仍有省略时会报告数量并引导模型
+调用 `skill.list`。完整 `SKILL.md` 正文继续通过 `skill.view` 按需加载；dynamic DAG planner
+不会收到这份业务 Skill 索引。
+
 ## SkillStore
 
 ```ts

@@ -14,7 +14,7 @@ import {
 } from './common.js';
 import { capabilityInvocationSchema, capabilityResultSchema } from './capability.js';
 import { dagNodeResultSchema, dagSpecSchema } from './dag.js';
-import { artifactStatesSchema } from './artifact.js';
+import { artifactFileManifestSchema, artifactStatesSchema } from './artifact.js';
 import { contextPolicySchema, contextUsageSchema, resultStoragePolicySchema } from './context.js';
 import { conversationStateSchema } from './conversation.js';
 import {
@@ -57,14 +57,26 @@ export const pendingReviewSchema = z
     proposedGraph: dagSpecSchema.optional(),
     rerunNodeIds: z.array(z.string()).readonly().default([]),
     invocation: capabilityInvocationSchema.optional(),
+    metadata: jsonObjectSchema.default({}),
     createdAt: timestampSchema,
   })
   .strict();
 export type PendingReview = z.infer<typeof pendingReviewSchema>;
 
+export const staticAgentContinuationSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    agentId: z.string().min(1),
+    invocation: capabilityInvocationSchema,
+    conversation: conversationStateSchema,
+    graphInput: jsonValueSchema,
+  })
+  .strict();
+export type StaticAgentContinuation = z.infer<typeof staticAgentContinuationSchema>;
+
 export const runStateSchema = z
   .object({
-    schemaVersion: runtimeSchemaVersionSchema.default(3),
+    schemaVersion: runtimeSchemaVersionSchema.default(4),
     runId: runIdSchema,
     status: z.enum([
       'pending',
@@ -80,11 +92,13 @@ export const runStateSchema = z
     conversation: conversationStateSchema.optional(),
     contextUsage: z.array(contextUsageSchema).readonly().default([]),
     validations: z.array(validationRecordSchema).readonly().default([]),
-    graphInput: jsonObjectSchema.default({}),
+    graphInput: jsonValueSchema.default({}),
     graph: dagSpecSchema.optional(),
     nodeResults: z.record(z.string(), dagNodeResultSchema).default({}),
     artifactStates: artifactStatesSchema.default({}),
+    inputArtifactFiles: z.array(artifactFileManifestSchema).readonly().default([]),
     pendingReview: pendingReviewSchema.optional(),
+    staticAgentContinuation: staticAgentContinuationSchema.optional(),
     output: jsonValueSchema.optional(),
     error: z.string().optional(),
     workspacePath: z.string(),
@@ -92,11 +106,59 @@ export const runStateSchema = z
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((state, context) => {
+    if (state.schemaVersion === 3 && state.inputArtifactFiles.length > 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'RunState V3 cannot contain input artifact file manifests.',
+        path: ['inputArtifactFiles'],
+      });
+      return;
+    }
+    const ids = state.inputArtifactFiles.map(({ artifactId }) => artifactId);
+    const sortedIds = [...new Set(ids)].sort();
+    if (ids.length !== sortedIds.length || ids.some((id, index) => id !== sortedIds[index])) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Input artifact manifests must have unique, sorted artifact ids.',
+        path: ['inputArtifactFiles'],
+      });
+    }
+    if (state.inputArtifactFiles.length === 0) return;
+    if (state.targetKind !== 'static-dag' || state.graph === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Input artifact manifests require a static DAG state.',
+        path: ['inputArtifactFiles'],
+      });
+      return;
+    }
+    for (const [manifestIndex, manifest] of state.inputArtifactFiles.entries()) {
+      const artifact = state.graph.artifacts[manifest.artifactId];
+      if (artifact === undefined) {
+        context.addIssue({
+          code: 'custom',
+          message: `Input artifact manifest references unknown artifact '${manifest.artifactId}'.`,
+          path: ['inputArtifactFiles', manifestIndex, 'artifactId'],
+        });
+        continue;
+      }
+      for (const [fileIndex, file] of manifest.files.entries()) {
+        if (!artifact.paths.some((path) => artifactDeclaresFile(path, file.path))) {
+          context.addIssue({
+            code: 'custom',
+            message: `Artifact file '${file.path}' is outside declared artifact '${manifest.artifactId}'.`,
+            path: ['inputArtifactFiles', manifestIndex, 'files', fileIndex, 'path'],
+          });
+        }
+      }
+    }
+  });
 export type RunState = z.infer<typeof runStateSchema>;
 
 const resolvedRunPlanPayloadShape = {
-  schemaVersion: checkpointSchemaVersionSchema.default(4),
+  schemaVersion: checkpointSchemaVersionSchema.default(5),
   target: z.record(z.string(), z.unknown()),
   capabilityIds: z.array(z.string()),
   capabilityFingerprints: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
@@ -194,14 +256,28 @@ export type ResolvedRunPlan = z.infer<typeof resolvedRunPlanSchema>;
 
 export const runCheckpointSchema = z
   .object({
-    schemaVersion: checkpointSchemaVersionSchema.default(4),
+    schemaVersion: checkpointSchemaVersionSchema.default(5),
     state: runStateSchema,
     plan: resolvedRunPlanSchema,
     usage: executionUsageSchema,
     createdAt: timestampSchema,
   })
   .strict()
-  .superRefine(({ state, plan, usage }, context) => {
+  .superRefine(({ schemaVersion, state, plan, usage }, context) => {
+    if (schemaVersion !== plan.schemaVersion) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Checkpoint schema version does not match its resolved plan.',
+        path: ['plan', 'schemaVersion'],
+      });
+    }
+    if (plan.schemaVersion !== (state.schemaVersion === 4 ? 5 : 4)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Resolved plan and run state schema versions are incompatible.',
+        path: ['state', 'schemaVersion'],
+      });
+    }
     if (plan.target['kind'] !== state.targetKind) {
       context.addIssue({
         code: 'custom',
@@ -240,6 +316,29 @@ export const runCheckpointSchema = z
         path: ['state', 'pendingReview', 'proposedGraph'],
       });
     }
+    const continuation = state.staticAgentContinuation;
+    if (continuation !== undefined) {
+      if (
+        state.targetKind !== 'static-dag' ||
+        state.status !== 'awaiting-review' ||
+        review?.kind !== 'capability-review' ||
+        review.invocation === undefined ||
+        JSON.stringify(review.invocation) !== JSON.stringify(continuation.invocation) ||
+        !plan.agentIds.includes(continuation.agentId)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Static agent continuation does not match the pending capability review.',
+          path: ['state', 'staticAgentContinuation'],
+        });
+      }
+    } else if (state.targetKind === 'static-dag' && review?.kind === 'capability-review') {
+      context.addIssue({
+        code: 'custom',
+        message: 'Static DAG capability reviews require an agent continuation.',
+        path: ['state', 'staticAgentContinuation'],
+      });
+    }
     const limits = [
       ['modelCalls', usage.modelCalls, plan.limits.maxModelCalls],
       ['capabilityCalls', usage.capabilityCalls, plan.limits.maxCapabilityCalls],
@@ -256,6 +355,12 @@ export const runCheckpointSchema = z
     }
   });
 export type RunCheckpoint = z.infer<typeof runCheckpointSchema>;
+
+function artifactDeclaresFile(declaredPath: string, filePath: string): boolean {
+  const normalized = declaredPath.replaceAll('\\', '/').replace(/\/+$/u, '');
+  const normalizedFile = filePath.replaceAll('\\', '/');
+  return normalizedFile === normalized || normalizedFile.startsWith(`${normalized}/`);
+}
 
 const eventBaseShape = {
   runId: runIdSchema,

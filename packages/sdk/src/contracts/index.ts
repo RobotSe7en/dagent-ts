@@ -5,6 +5,7 @@ export * from './common.js';
 export * from './context.js';
 export * from './conversation.js';
 export * from './dag.js';
+export * from './dag-design.js';
 export * from './messages.js';
 export * from './profile.js';
 export * from './runtime.js';

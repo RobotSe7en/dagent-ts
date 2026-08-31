@@ -9,18 +9,31 @@ import type { DatabaseSchema } from './schema.js';
 
 export type AppDatabase = Kysely<DatabaseSchema>;
 
-export async function openDatabase(pathValue: string): Promise<AppDatabase> {
+export type OpenDatabaseOptions = {
+  readonly nativeBinding?: string;
+};
+
+export async function openDatabase(
+  pathValue: string,
+  options: OpenDatabaseOptions = {},
+): Promise<AppDatabase> {
   const path = resolve(pathValue);
   await mkdir(dirname(path), { recursive: true });
-  const sqlite = new Database(path);
+  const sqlite = new Database(path, options);
   await chmod(path, 0o600);
   sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('foreign_keys = ON');
+  sqlite.pragma('foreign_keys = OFF');
   sqlite.pragma('busy_timeout = 5000');
   const database = new Kysely<DatabaseSchema>({
     dialect: new SqliteDialect({ database: sqlite }),
   });
   await migrate(database);
+  sqlite.pragma('foreign_keys = ON');
+  const violations = sqlite.pragma('foreign_key_check') as unknown[];
+  if (violations.length > 0) {
+    await database.destroy();
+    throw new Error('Database migration left foreign-key violations.');
+  }
   return database;
 }
 
@@ -333,6 +346,52 @@ async function migrate(database: AppDatabase): Promise<void> {
                 .alterTable('model_providers')
                 .dropColumn('stream_include_usage')
                 .execute();
+            },
+          },
+          '011_standalone_conversations': {
+            async up(db) {
+              await sql`pragma legacy_alter_table = on`.execute(db);
+              await db.schema
+                .alterTable('conversations')
+                .renameTo('conversations_before_workspace_scope')
+                .execute();
+              await db.schema
+                .createTable('conversations')
+                .addColumn('id', 'text', (column) => column.primaryKey())
+                .addColumn('project_id', 'text', (column) =>
+                  column.references('projects.id').onDelete('cascade'),
+                )
+                .addColumn('workspace_scope', 'text', (column) =>
+                  column.notNull().defaultTo('project'),
+                )
+                .addColumn('title', 'text', (column) => column.notNull())
+                .addColumn('kind', 'text', (column) => column.notNull())
+                .addColumn('schema_version', 'integer', (column) => column.notNull())
+                .addColumn('conversation_json', 'text', (column) => column.notNull())
+                .addColumn('revision', 'integer', (column) => column.notNull())
+                .addColumn('created_at', 'text', (column) => column.notNull())
+                .addColumn('updated_at', 'text', (column) => column.notNull())
+                .execute();
+              await sql`
+                insert into conversations (
+                  id, project_id, workspace_scope, title, kind, schema_version,
+                  conversation_json, revision, created_at, updated_at
+                )
+                select
+                  id, project_id, 'project', title, kind, schema_version,
+                  conversation_json, revision, created_at, updated_at
+                from conversations_before_workspace_scope
+              `.execute(db);
+              await db.schema.dropTable('conversations_before_workspace_scope').execute();
+              await db.schema
+                .createIndex('conversations_project_updated')
+                .on('conversations')
+                .columns(['project_id', 'updated_at'])
+                .execute();
+              await sql`pragma legacy_alter_table = off`.execute(db);
+            },
+            async down() {
+              throw new Error('Standalone conversation migration is not safely reversible.');
             },
           },
         };

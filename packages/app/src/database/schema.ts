@@ -11,7 +11,8 @@ export type ProjectTable = {
 
 export type ConversationTable = {
   id: string;
-  project_id: string;
+  project_id: string | null;
+  workspace_scope: string;
   title: string;
   kind: string;
   schema_version: number;

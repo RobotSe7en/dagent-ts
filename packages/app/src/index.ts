@@ -1,5 +1,7 @@
 export { appConfigSchema, databasePath, loadAppConfig } from './config.js';
 export type { AppConfig } from './config.js';
+export { createApplicationRuntime } from './application-runtime.js';
+export type { ApplicationRuntime } from './application-runtime.js';
 export { openDatabase } from './database/database.js';
 export type { AppDatabase } from './database/database.js';
 export { AgentRepository } from './database/agent-repository.js';
@@ -18,6 +20,7 @@ export type {
   ConversationKind,
   Project,
   StoredRun,
+  WorkspaceScope,
 } from './database/repositories.js';
 export { SavedDagRepository } from './database/saved-dag-repository.js';
 export type { SavedDag } from './database/saved-dag-repository.js';

@@ -4,6 +4,8 @@ coverage/
 .dagent-ts/
 *.tsbuildinfo
 apps/web/.vite/
+apps/desktop/.vite/
+apps/desktop/out/
 packages/app/data/
 reference/
 .env

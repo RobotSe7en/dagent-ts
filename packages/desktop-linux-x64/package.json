@@ -1,0 +1,24 @@
+{
+  "name": "@dagent-ai/desktop-linux-x64",
+  "version": "0.9.5",
+  "description": "DagentWork prebuilt desktop application for Linux x64",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dagentExecutable": "dist/DagentWork",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

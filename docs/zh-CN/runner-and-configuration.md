@@ -42,8 +42,9 @@ const runner = new Runner({
 });
 ```
 
-`workspace` 是默认运行工作区。单次 `run()` 可以通过 `workspacePath` 选择其他工作区；
-`runtimeDirectory` 必须是安全相对路径，并在每个运行工作区内保存私有结果与恢复历史。
+`workspace` 是默认运行工作区，默认值为 `~/.dagent`；单次 `run()` 可以通过
+`workspacePath` 选择其他工作区。`runtimeDirectory` 默认为 `.runtime`，必须是安全相对
+路径，并在每个运行工作区内保存私有结果与恢复历史。负责持久化的 Host 应显式传入两者。
 
 目录按需创建：
 

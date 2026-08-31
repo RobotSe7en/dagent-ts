@@ -7,6 +7,7 @@ export function publicConversationSummary(conversation: Conversation) {
   return {
     id: conversation.id,
     projectId: conversation.projectId,
+    workspaceScope: conversation.workspaceScope,
     title: conversation.title,
     kind: conversation.kind,
     schemaVersion: conversation.schemaVersion,

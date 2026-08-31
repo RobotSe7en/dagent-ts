@@ -36,6 +36,8 @@ Run it:
 const outcome = await runner.run(target, {
   graphInput: { text: 'hello' },
 });
+
+if (outcome.status === 'completed') console.log(outcome.output);
 ```
 
 Register every capability used by the graph with the same Runner.
@@ -86,6 +88,49 @@ Conditions support `truthy`, `falsy`, `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, and
 dataflow reference must still be dominated by a structural dependency. A condition cannot bypass
 dependency validation.
 
+Use a condition node for ordered, mutually exclusive IF/ELIF/ELSE routing. The first matching case
+wins; otherwise the required default branch is selected:
+
+```ts
+import { allOf, anyOf, notCondition } from 'dagent-ai';
+
+const passing = {
+  operator: 'gte' as const,
+  left: scored.output('score').toBinding(),
+  right: 0.8,
+};
+const route = graph.condition(
+  [
+    {
+      branch: 'publish',
+      when: allOf(
+        passing,
+        anyOf(passing, {
+          operator: 'eq',
+          left: scored.output('score').toBinding(),
+          right: 1,
+        }),
+        notCondition({
+          operator: 'lt',
+          left: scored.output('score').toBinding(),
+          right: 0.5,
+        }),
+      ),
+    },
+  ],
+  'revise',
+  { id: 'route', after: [scored] },
+);
+
+graph.addEdge(route, publish, { branch: 'publish' });
+graph.addEdge(route, revise, { branch: 'revise' });
+```
+
+A selected branch can fan out to several targets or end without an outgoing edge. Every outgoing
+edge from a condition node must name a declared branch. Other nodes cannot originate branch edges,
+and one edge cannot combine `branch` with `condition`. Execution writes `{ branch: string }` as the
+condition node output and records the same value as `selectedBranch` on its node result.
+
 ## Agent Nodes
 
 ```ts
@@ -95,6 +140,11 @@ graph.setOutput(answer.output());
 
 `researcher` must be registered with Runner. An Agent node outputs a string. Use a capability or a
 DAG with an explicit schema for more complex structures.
+
+A direct top-level ToolAgent node uses the ToolAgent's ordinary inner-call review policy and can be
+resumed from its checkpoint. Agent nodes nested inside subgraphs, maps, or loops are rejected before
+execution because nested ToolAgent progress is not yet safely restorable. Static capability nodes
+remain directly authorized by the DAG author.
 
 ## Artifacts
 
@@ -120,6 +170,12 @@ graph.capability(
 Artifact paths are relative to the run workspace. `artifactInputs` and `artifactOutputs` declare
 node boundaries for preflight validation and runtime state tracking. Capability implementations
 must still handle paths safely.
+
+For uploaded directory inputs, `report.files()` returns a sorted upload-time manifest. Each entry
+has a workspace-relative `path`, basename `name`, byte `size`, and optional `mediaType`; use
+`.at(index, 'path')` or map over the list. It never scans the workspace during execution or resume.
+Uploads reject unsafe or duplicate targets, symlinked destinations, more than 256 files, a file over
+25 MiB, or more than 100 MiB total.
 
 ## Map
 
@@ -196,3 +252,9 @@ import { assertValidDag, validateDag, validateDagInScope } from 'dagent-ai';
 
 `validateDag()` returns issues and fits an editor. `assertValidDag()` throws `DagentError` and fits
 an execution boundary. Builder `build()` already performs scope-aware validation.
+
+Every declared `inputSchema` is checked as a valid, self-contained JSON Schema Draft 2020-12
+document. `validateDagInput(graphOrSchema, value)` validates any JSON value without coercion or
+applying defaults. Runner performs this check before creating a run workspace or emitting an event;
+subgraphs and every loop iteration validate their resolved inputs before invoking child
+capabilities. Failures throw `DagInputValidationError` with `path` and `schemaPath`.

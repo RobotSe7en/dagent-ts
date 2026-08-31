@@ -74,6 +74,7 @@ describe('ProfileStore', () => {
     expect(profiles.map(({ name }) => name)).toEqual([
       'conversation',
       'dag_agent',
+      'dag_design',
       'validator_agent',
       'feedback_learner',
     ]);

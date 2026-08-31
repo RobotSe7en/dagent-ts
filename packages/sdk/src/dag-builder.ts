@@ -3,14 +3,16 @@ import { z } from 'zod';
 import type { CapabilityBinding } from './capabilities/tool.js';
 import type {
   DAGSpec,
+  ConditionCase,
   DagCondition,
   DagEdge,
   DagNode,
   ValueBinding,
   ValueExpression,
 } from './contracts/dag.js';
-import type { Artifact } from './contracts/artifact.js';
+import type { Artifact, ArtifactFileRef as ArtifactFile } from './contracts/artifact.js';
 import { dagSpecSchema } from './contracts/dag.js';
+import { conditionSchema } from './contracts/dag.js';
 import { assertValidDagInScope } from './domain/dag-validation.js';
 import { deepFreeze } from './internal/deep-freeze.js';
 
@@ -32,7 +34,8 @@ export class ValueRef<T = unknown> {
     if (
       expression.type !== 'graph-input' &&
       expression.type !== 'node-output' &&
-      expression.type !== 'item'
+      expression.type !== 'item' &&
+      !(expression.type === 'artifact' && expression.field === 'files')
     ) {
       throw new TypeError(`Expression '${expression.type}' does not support nested paths.`);
     }
@@ -77,15 +80,24 @@ export class ArtifactRef {
   }
 
   public path(): ValueRef<string> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'path' });
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'path', path: [] });
   }
 
   public paths(): ValueRef<readonly string[]> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'paths' });
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'paths', path: [] });
   }
 
   public absolutePath(): ValueRef<string> {
-    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'absolutePath' });
+    return new ValueRef({
+      type: 'artifact',
+      artifactId: this.id,
+      field: 'absolutePath',
+      path: [],
+    });
+  }
+
+  public files(): ValueRef<readonly ArtifactFile[]> {
+    return new ValueRef({ type: 'artifact', artifactId: this.id, field: 'files', path: [] });
   }
 }
 
@@ -112,6 +124,25 @@ export type NodeOptions = {
   readonly artifactInputs?: readonly ArtifactRef[];
   readonly artifactOutputs?: readonly ArtifactRef[];
 };
+
+export type ConditionNodeOptions = Omit<NodeOptions, 'artifactInputs' | 'artifactOutputs'>;
+
+export type EdgeOptions = {
+  readonly condition?: DagCondition;
+  readonly branch?: string;
+};
+
+export function allOf(...conditions: readonly DagCondition[]): DagCondition {
+  return conditionSchema.parse({ operator: 'all', conditions });
+}
+
+export function anyOf(...conditions: readonly DagCondition[]): DagCondition {
+  return conditionSchema.parse({ operator: 'any', conditions });
+}
+
+export function notCondition(condition: DagCondition): DagCondition {
+  return conditionSchema.parse({ operator: 'not', condition });
+}
 
 export class DagBuilder<TInput = Record<string, unknown>, TOutput = unknown, TItem = unknown> {
   readonly #options: DagBuilderOptions<TInput, TOutput>;
@@ -214,9 +245,9 @@ export class DagBuilder<TInput = Record<string, unknown>, TOutput = unknown, TIt
     return new NodeRef(options.id);
   }
 
-  public subgraph<TNestedOutput>(
-    graph: TypedDagSpec<unknown, TNestedOutput>,
-    input: Bindable<Record<string, unknown>>,
+  public subgraph<TNestedInput, TNestedOutput>(
+    graph: TypedDagSpec<TNestedInput, TNestedOutput>,
+    input: Bindable<TNestedInput>,
     options: NodeOptions,
   ): NodeRef<TNestedOutput> {
     this.#addNode(
@@ -258,9 +289,9 @@ export class DagBuilder<TInput = Record<string, unknown>, TOutput = unknown, TIt
     return new NodeRef(options.id);
   }
 
-  public loop<TNestedOutput>(
-    graph: TypedDagSpec<unknown, TNestedOutput>,
-    input: Bindable<Record<string, unknown>>,
+  public loop<TNestedInput, TNestedOutput>(
+    graph: TypedDagSpec<TNestedInput, TNestedOutput>,
+    input: Bindable<TNestedInput>,
     until: DagCondition,
     options: NodeOptions & { readonly maxIterations: number },
   ): NodeRef<TNestedOutput> {
@@ -282,11 +313,41 @@ export class DagBuilder<TInput = Record<string, unknown>, TOutput = unknown, TIt
     return new NodeRef(options.id);
   }
 
-  public addEdge(from: NodeRef, to: NodeRef, condition?: DagCondition): this {
+  public condition(
+    cases: readonly ConditionCase[],
+    defaultBranch: string,
+    options: ConditionNodeOptions,
+  ): NodeRef<{ readonly branch: string }> {
+    this.#addNode(
+      {
+        id: options.id,
+        kind: 'condition',
+        ...(options.name === undefined ? {} : { name: options.name }),
+        description: options.description ?? '',
+        cases,
+        defaultBranch,
+        artifactInputs: [],
+        artifactOutputs: [],
+      },
+      options,
+    );
+    return new NodeRef(options.id);
+  }
+
+  public addEdge(
+    from: NodeRef,
+    to: NodeRef,
+    conditionOrOptions?: DagCondition | EdgeOptions,
+  ): this {
+    const options =
+      conditionOrOptions !== undefined && 'operator' in conditionOrOptions
+        ? { condition: conditionOrOptions }
+        : conditionOrOptions;
     this.#edges.push({
       from: from.id,
       to: to.id,
-      ...(condition === undefined ? {} : { condition }),
+      ...(options?.condition === undefined ? {} : { condition: options.condition }),
+      ...(options?.branch === undefined ? {} : { branch: options.branch }),
     });
     return this;
   }

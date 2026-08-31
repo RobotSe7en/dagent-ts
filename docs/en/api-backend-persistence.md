@@ -34,21 +34,21 @@ replacing the database and lease implementations rather than sharing SQLite betw
 
 Primary tables:
 
-| Table                    | Contents                                                 |
-| ------------------------ | -------------------------------------------------------- |
-| `projects`               | project metadata and root path                           |
-| `conversations`          | complete V3 ConversationState, kind, and revision        |
-| `runs`                   | target, redacted input, status, and latest V4 checkpoint |
-| `run_events`             | complete event log unique by `(run_id, sequence)`        |
-| `saved_dags`             | canonical graph, canvas layout, revision, archive state  |
-| `orchestration_sessions` | conversation, draft graph, and UI-state association      |
-| `agents`                 | managed Agent presets                                    |
-| `model_providers`        | provider configuration and active marker                 |
-| `mcp_servers`            | persisted MCP server configuration                       |
-| `capability_modules`     | module source, path, exports, and enabled state          |
-| `template_capabilities`  | UI-created capability templates                          |
-| `settings`               | validation and application settings                      |
-| `leases`                 | single-writer leases                                     |
+| Table                    | Contents                                                  |
+| ------------------------ | --------------------------------------------------------- |
+| `projects`               | project metadata and root path                            |
+| `conversations`          | V3 state, nullable project, workspace scope, and revision |
+| `runs`                   | target, redacted input, status, and latest V5 checkpoint  |
+| `run_events`             | complete event log unique by `(run_id, sequence)`         |
+| `saved_dags`             | canonical graph, canvas layout, revision, archive state   |
+| `orchestration_sessions` | conversation, draft graph, and UI-state association       |
+| `agents`                 | managed Agent presets                                     |
+| `model_providers`        | provider configuration and active marker                  |
+| `mcp_servers`            | persisted MCP server configuration                        |
+| `capability_modules`     | module source, path, exports, and enabled state           |
+| `template_capabilities`  | UI-created capability templates                           |
+| `settings`               | validation and application settings                       |
+| `leases`                 | single-writer leases                                      |
 
 Binary uploads are not copied verbatim into `runs.input_json`; the host stores filename and byte
 length only. Content belongs to the SDK conversation resource store or project/artifact files.
@@ -64,6 +64,12 @@ Only an identity-matched V3 `ConversationState` is authoritative:
 Whole-document updates use revision CAS. Migration 009 marks older V1/V2 or damaged structures as
 schema version 0. Reading their complete state or continuing them returns a conflict instead of
 guessing a conversion in the request path.
+
+`workspaceScope` is either `project` or `standalone`. Project conversations require `projectId`;
+standalone conversations forbid it. Standalone runs use
+`<dataDirectory>/projects/_standalone/<conversationId>/workspace`, while project runs continue to
+use the selected project root. Migration 011 rebuilds the conversation foreign-key boundary while
+retaining existing project conversations.
 
 ## Runs and Events
 

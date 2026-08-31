@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 export const schemaVersionSchema = z.literal(1);
 export type SchemaVersion = z.infer<typeof schemaVersionSchema>;
-export const runtimeSchemaVersionSchema = z.literal(3);
+export const runtimeSchemaVersionSchema = z.union([z.literal(3), z.literal(4)]);
 export type RuntimeSchemaVersion = z.infer<typeof runtimeSchemaVersionSchema>;
-export const checkpointSchemaVersionSchema = z.literal(4);
+export const checkpointSchemaVersionSchema = z.union([z.literal(4), z.literal(5)]);
 export type CheckpointSchemaVersion = z.infer<typeof checkpointSchemaVersionSchema>;
 
 export const maxExtraSystemPromptLength = 16_384;
@@ -60,11 +60,7 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 
 export const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
 
-export const jsonSchemaSchema = z
-  .record(z.string(), z.unknown())
-  .refine((value) => typeof value['type'] === 'string' || '$ref' in value || 'anyOf' in value, {
-    message: 'Expected a JSON Schema object.',
-  });
+export const jsonSchemaSchema = z.record(z.string(), z.unknown());
 export type JsonSchema = z.infer<typeof jsonSchemaSchema>;
 
 export function nowTimestamp(): string {

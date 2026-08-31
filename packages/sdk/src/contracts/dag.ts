@@ -27,7 +27,8 @@ export const valueExpressionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('artifact'),
     artifactId: identifierSchema,
-    field: z.enum(['path', 'paths', 'absolutePath', 'absolutePaths']).default('path'),
+    field: z.enum(['path', 'paths', 'absolutePath', 'absolutePaths', 'files']).default('path'),
+    path: z.array(z.union([z.string(), z.number().int().nonnegative()])).default([]),
   }),
   z.object({
     type: z.literal('item'),
@@ -65,21 +66,64 @@ export const valueBindingSchema: z.ZodType<ValueBinding> = z.lazy(() =>
   ]),
 );
 
-export const conditionSchema = z.discriminatedUnion('operator', [
-  z.object({ operator: z.literal('truthy'), value: valueBindingSchema }),
-  z.object({ operator: z.literal('falsy'), value: valueBindingSchema }),
-  z.object({
-    operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte']),
-    left: valueBindingSchema,
-    right: valueBindingSchema,
-  }),
-  z.object({
-    operator: z.literal('in'),
-    value: valueBindingSchema,
-    collection: valueBindingSchema,
-  }),
-]);
-export type DagCondition = z.infer<typeof conditionSchema>;
+export type DagCondition =
+  | { readonly operator: 'truthy'; readonly value: ValueBinding }
+  | { readonly operator: 'falsy'; readonly value: ValueBinding }
+  | {
+      readonly operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
+      readonly left: ValueBinding;
+      readonly right: ValueBinding;
+    }
+  | {
+      readonly operator: 'in';
+      readonly value: ValueBinding;
+      readonly collection: ValueBinding;
+    }
+  | { readonly operator: 'all'; readonly conditions: readonly DagCondition[] }
+  | { readonly operator: 'any'; readonly conditions: readonly DagCondition[] }
+  | { readonly operator: 'not'; readonly condition: DagCondition };
+
+export const conditionSchema: z.ZodType<DagCondition> = z.lazy(() =>
+  z.discriminatedUnion('operator', [
+    z.object({ operator: z.literal('truthy'), value: valueBindingSchema }).strict(),
+    z.object({ operator: z.literal('falsy'), value: valueBindingSchema }).strict(),
+    z
+      .object({
+        operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte']),
+        left: valueBindingSchema,
+        right: valueBindingSchema,
+      })
+      .strict(),
+    z
+      .object({
+        operator: z.literal('in'),
+        value: valueBindingSchema,
+        collection: valueBindingSchema,
+      })
+      .strict(),
+    z
+      .object({
+        operator: z.enum(['all', 'any']),
+        conditions: z.array(conditionSchema).min(1).readonly(),
+      })
+      .strict(),
+    z.object({ operator: z.literal('not'), condition: conditionSchema }).strict(),
+  ]),
+);
+
+export type ConditionCase = {
+  readonly branch: string;
+  readonly when: DagCondition;
+};
+
+export const conditionCaseSchema: z.ZodType<ConditionCase> = z
+  .object({
+    branch: z.string().refine((value) => value.trim().length > 0, {
+      message: 'Condition branch must be non-empty.',
+    }),
+    when: conditionSchema,
+  })
+  .strict();
 
 const nodeBaseShape = {
   id: identifierSchema,
@@ -156,12 +200,23 @@ export type DagNode =
       readonly maxIterations: number;
       readonly artifactInputs: readonly string[];
       readonly artifactOutputs: readonly string[];
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'condition';
+      readonly name?: string | undefined;
+      readonly description: string;
+      readonly cases: readonly ConditionCase[];
+      readonly defaultBranch: string;
+      readonly artifactInputs: readonly string[];
+      readonly artifactOutputs: readonly string[];
     };
 
 export type DagEdge = {
   readonly from: string;
   readonly to: string;
   readonly condition?: DagCondition | undefined;
+  readonly branch?: string | undefined;
 };
 
 export const dagNodeSchema: z.ZodType<DagNode> = z.lazy(() =>
@@ -210,6 +265,16 @@ export const dagNodeSchema: z.ZodType<DagNode> = z.lazy(() =>
         maxIterations: z.number().int().positive().max(100),
       })
       .strict(),
+    z
+      .object({
+        ...nodeBaseShape,
+        kind: z.literal('condition'),
+        cases: z.array(conditionCaseSchema).min(1).readonly(),
+        defaultBranch: z.string().refine((value) => value.trim().length > 0, {
+          message: 'Condition defaultBranch must be non-empty.',
+        }),
+      })
+      .strict(),
   ]),
 );
 
@@ -218,6 +283,7 @@ export const dagEdgeSchema: z.ZodType<DagEdge> = z
     from: identifierSchema,
     to: identifierSchema,
     condition: conditionSchema.optional(),
+    branch: z.string().min(1).optional(),
   })
   .strict();
 
@@ -256,6 +322,7 @@ export const dagNodeResultSchema = z
     references: z.array(contentReferenceSchema).readonly().default([]),
     content: z.string().default(''),
     error: z.string().optional(),
+    selectedBranch: z.string().min(1).optional(),
     startedAt: z.iso.datetime({ offset: true }).optional(),
     completedAt: z.iso.datetime({ offset: true }).optional(),
   })

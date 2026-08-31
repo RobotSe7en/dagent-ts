@@ -950,6 +950,26 @@ button.primary,
   gap: 6px;
 }
 
+.dag-design-bar {
+  display: flex;
+  gap: 8px;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.dag-design-bar input {
+  min-width: 0;
+  flex: 1;
+}
+
+.dag-design-bar button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .dag-layout,
 .workbench-layout {
   display: grid;

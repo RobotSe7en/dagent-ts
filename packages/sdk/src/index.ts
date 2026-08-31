@@ -28,10 +28,20 @@ export type {
   CapabilityExecutionContext,
   ToolOptions,
 } from './capabilities/index.js';
-export { ArtifactRef, DagBuilder, NodeRef, ValueRef } from './dag-builder.js';
+export {
+  allOf,
+  anyOf,
+  ArtifactRef,
+  DagBuilder,
+  NodeRef,
+  notCondition,
+  ValueRef,
+} from './dag-builder.js';
 export type {
   Bindable,
+  ConditionNodeOptions,
   DagBuilderOptions,
+  EdgeOptions,
   InputBindings,
   NodeOptions,
   TypedDagSpec,
@@ -42,12 +52,13 @@ export {
   validateDag,
   validateDagInScope,
 } from './domain/dag-validation.js';
+export { validateDagInput, validateInputSchema } from './domain/dag-input-validation.js';
 export type {
   DagValidationIssue,
   DagValidationResult,
   DagValidationScope,
 } from './domain/dag-validation.js';
-export { DagentError } from './errors.js';
+export { DagentError, DagInputValidationError } from './errors.js';
 export type { DagentErrorCode } from './errors.js';
 export {
   ContextAssembler,
@@ -68,8 +79,10 @@ export {
 } from './mcp/index.js';
 export type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from './mcp/index.js';
 export { Runner } from './runner.js';
+export { inspectDag } from './runtime/dag-design.js';
 export type {
   AgentRunInput,
+  DagDesignOptions,
   RunnerOptions,
   RunInput,
   RunOptions,
@@ -138,7 +151,18 @@ export type {
   ArtifactState,
   ArtifactStates,
   ArtifactUpload,
+  ArtifactFileManifest,
+  ArtifactFileRef,
   DAGSpec,
+  DagDesignEvent,
+  DagDesignResult,
+  DagDesignSelection,
+  DagDiagnostic,
+  DagCondition,
+  DagEdge,
+  DagNode,
+  DagNodeResult,
+  ConditionCase,
   ExecutionLimits,
   ExecutionUsage,
   JsonObject,

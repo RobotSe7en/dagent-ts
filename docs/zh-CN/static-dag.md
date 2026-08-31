@@ -35,6 +35,8 @@ const target = defineStaticDag(graph.build());
 const outcome = await runner.run(target, {
   graphInput: { text: 'hello' },
 });
+
+if (outcome.status === 'completed') console.log(outcome.output);
 ```
 
 确保 graph 使用的 capability 已注册到同一个 Runner。
@@ -82,6 +84,49 @@ graph.addEdge(first, conditional, {
 条件支持 `truthy`、`falsy`、`eq`、`neq`、`gt`、`gte`、`lt`、`lte` 和 `in`。节点
 dataflow 引用仍必须由结构依赖支配；条件不是绕过依赖检查的方式。
 
+有序且互斥的 IF/ELIF/ELSE 路由应使用 condition 节点。第一个匹配 case 胜出；如果没有
+匹配项，则选择必填的默认 branch：
+
+```ts
+import { allOf, anyOf, notCondition } from 'dagent-ai';
+
+const passing = {
+  operator: 'gte' as const,
+  left: scored.output('score').toBinding(),
+  right: 0.8,
+};
+const route = graph.condition(
+  [
+    {
+      branch: 'publish',
+      when: allOf(
+        passing,
+        anyOf(passing, {
+          operator: 'eq',
+          left: scored.output('score').toBinding(),
+          right: 1,
+        }),
+        notCondition({
+          operator: 'lt',
+          left: scored.output('score').toBinding(),
+          right: 0.5,
+        }),
+      ),
+    },
+  ],
+  'revise',
+  { id: 'route', after: [scored] },
+);
+
+graph.addEdge(route, publish, { branch: 'publish' });
+graph.addEdge(route, revise, { branch: 'revise' });
+```
+
+选中的 branch 可以 fan out 到多个 target，也可以没有出边而正常结束。Condition 节点的
+每条出边都必须声明已有 branch；其他节点不能产生 branch edge；同一条 edge 不能同时设置
+`branch` 与 `condition`。执行时 condition 节点输出 `{ branch: string }`，并在节点结果的
+`selectedBranch` 中记录同一个值。
+
 ## Agent 节点
 
 ```ts
@@ -91,6 +136,10 @@ graph.setOutput(answer.output());
 
 `researcher` 必须在 Runner 中注册。Agent 节点输出是字符串；更复杂的结构应由 capability
 产生或通过明确 schema 的 DAG 输出。
+
+顶层直接 ToolAgent node 使用 ToolAgent 原有的内部调用审核策略，并可从 checkpoint 恢复。
+Subgraph、map 或 loop 内嵌套的 Agent node 会在执行前被拒绝，因为其 ToolAgent 进度尚不能
+安全恢复。静态 capability node 仍由 DAG 作者直接授权。
 
 ## Artifacts
 
@@ -115,6 +164,11 @@ graph.capability(
 
 artifact 路径相对运行 workspace。`artifactInputs`/`artifactOutputs` 声明节点边界，用于执行
 前校验和运行状态跟踪；能力实现仍必须安全处理路径。
+
+对于上传的目录输入，`report.files()` 返回排序后的上传时清单。每个条目包含相对工作区的
+`path`、basename `name`、字节 `size` 与可选 `mediaType`；可通过 `.at(index, 'path')`
+选择字段，或对列表执行 map。运行和恢复时都不会扫描 workspace。上传会拒绝不安全或重复
+目标、符号链接目标、超过 256 个文件、单文件超过 25 MiB 或总量超过 100 MiB。
 
 ## Map
 
@@ -191,3 +245,9 @@ import { assertValidDag, validateDag, validateDagInScope } from 'dagent-ai';
 
 `validateDag()` 返回 issues，适合编辑器；`assertValidDag()` 失败时抛出 `DagentError`，
 适合执行边界。Builder 的 `build()` 已自动进行 scope-aware 校验。
+
+每个已声明的 `inputSchema` 都会作为有效且 self-contained 的 JSON Schema Draft 2020-12
+文档校验。`validateDagInput(graphOrSchema, value)` 可以校验任意 JSON value，不做 coercion，
+也不应用 default。Runner 会在创建运行 workspace 或发送 event 前完成校验；subgraph 和
+loop 的每次迭代也会在调用子 capability 前校验 resolved input。失败会抛出带 `path` 与
+`schemaPath` 的 `DagInputValidationError`。

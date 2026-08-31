@@ -8,15 +8,17 @@ import type {
   ValueExpression,
 } from '../contracts/dag.js';
 import { valueExpressionSchema } from '../contracts/dag.js';
-import type { JsonObject, JsonValue } from '../contracts/common.js';
+import type { JsonValue } from '../contracts/common.js';
+import type { ArtifactFileManifest } from '../contracts/artifact.js';
 import { DagentError } from '../errors.js';
 
 export type ValueResolutionContext = {
-  readonly graphInput: JsonObject;
+  readonly graphInput: JsonValue;
   readonly nodeResults: Readonly<Record<string, DagNodeResult>>;
   readonly nodeValues?: Readonly<Record<string, JsonValue>>;
   readonly graph: DAGSpec;
   readonly workspacePath: string;
+  readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
   readonly item?: JsonValue;
   readonly iteration?: number;
 };
@@ -46,6 +48,15 @@ export function evaluateCondition(
   condition: DagCondition,
   context: ValueResolutionContext,
 ): boolean {
+  if (condition.operator === 'all') {
+    return condition.conditions.every((child) => evaluateCondition(child, context));
+  }
+  if (condition.operator === 'any') {
+    return condition.conditions.some((child) => evaluateCondition(child, context));
+  }
+  if (condition.operator === 'not') {
+    return !evaluateCondition(condition.condition, context);
+  }
   if (condition.operator === 'truthy') return Boolean(resolveBinding(condition.value, context));
   if (condition.operator === 'falsy') return !resolveBinding(condition.value, context);
   if (condition.operator === 'in') {
@@ -106,6 +117,20 @@ function resolveExpression(
       const absolutePaths = artifact.paths.map((path) =>
         resolveWorkspacePath(context.workspacePath, path),
       );
+      if (expression.field === 'files') {
+        const files =
+          context.inputArtifactFiles?.find(({ artifactId }) => artifactId === expression.artifactId)
+            ?.files ?? [];
+        return readPath(
+          files.map((file) => ({
+            path: file.path,
+            name: file.name,
+            size: file.size,
+            ...(file.mediaType === undefined ? {} : { mediaType: file.mediaType }),
+          })),
+          expression.path,
+        );
+      }
       switch (expression.field) {
         case 'path':
           return artifact.paths[0] ?? '';

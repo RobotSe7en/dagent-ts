@@ -36,7 +36,7 @@ GET /api/v1/health
 ```
 
 ```json
-{ "status": "ok", "version": "0.8.3" }
+{ "status": "ok", "version": "0.9.5" }
 ```
 
 ## 项目与文件
@@ -67,6 +67,7 @@ GET /api/v1/health
 ```json
 {
   "projectId": "project_...",
+  "workspaceScope": "project",
   "title": "Release review",
   "kind": "chat"
 }
@@ -74,6 +75,8 @@ GET /api/v1/health
 
 `kind` 为 `chat`、`dynamic-dag` 或 `static-dag`。详情中的 conversation 是公共 V3 投影：
 reasoning、tool calls、内部项和敏感 system prompts 已删除。
+托管独立会话省略 `projectId` 并使用 `workspaceScope: "standalone"`；运行会获得隔离的
+Host 托管工作区，而不是项目 root。
 
 ## 启动运行
 
@@ -131,6 +134,10 @@ Agent：
   }
 }
 ```
+
+`graphInput` 可以是任意 JSON value，并会按 graph 可选的 Draft 2020-12 `inputSchema`
+校验。Canonical 0.9 graph 可以包含 `kind: "condition"` 节点、`branch` edge，以及完成
+节点结果中的 `selectedBranch`。
 
 上传最多 32 个 Agent attachments，内容必须是合法 base64。返回：
 
@@ -199,6 +206,8 @@ Host 从数据库读取完整 checkpoint，并原子 claim review。客户端不
 | 方法                       | 路径                               | 用途                           |
 | -------------------------- | ---------------------------------- | ------------------------------ |
 | `POST`                     | `/dags/validate`                   | 校验 canonical DAGSpec         |
+| `POST`                     | `/dags/inspect`                    | 返回确定性 DAG diagnostics     |
+| `POST`                     | `/dags/design`                     | 非执行型模型辅助 DAG 设计      |
 | `GET` / `POST`             | `/saved-dags`                      | 查询、创建保存图               |
 | `GET` / `PATCH` / `DELETE` | `/saved-dags/:id`                  | 详情、revision 更新、归档/删除 |
 | `GET` / `POST`             | `/saved-dags/:id/runs`             | 图的运行历史与启动             |
@@ -207,6 +216,7 @@ Host 从数据库读取完整 checkpoint，并原子 claim review。客户端不
 | `GET`                      | `/orchestration-sessions/:id/runs` | 编排运行                       |
 
 Saved DAG 的 graph 与 layout 分开存储；只有 graph 进入 Runner。
+设计与检查不会启动 run 或调用图。详见 [非执行 DAG 设计](dag-design.md)。
 
 ## 配置资源
 

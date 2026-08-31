@@ -246,6 +246,26 @@ describe('static DAG control flow', () => {
     expect(outcome.state.output).toBeNull();
   });
 
+  it.each([
+    ['good text', 'publish', 'published:good text|null', 'completed', 'skipped'],
+    ['bad text', 'revise', 'null|revised:bad text', 'skipped', 'completed'],
+  ] as const)(
+    'selects one first-class condition branch for %s',
+    async (text, selectedBranch, expected, publishStatus, reviseStatus) => {
+      const graph = conditionBranchingGraph();
+      const outcome = await runStatic(graph, { text }, [score, publish, revise, render]);
+
+      expect(outcome.status, outcome.state.error).toBe('completed');
+      expect(outcome.state.nodeResults['route']).toMatchObject({
+        output: { branch: selectedBranch },
+        selectedBranch,
+      });
+      expect(outcome.state.nodeResults['publish']?.status).toBe(publishStatus);
+      expect(outcome.state.nodeResults['revise']?.status).toBe(reviseStatus);
+      expect(outcome.state.output).toBe(expected);
+    },
+  );
+
   it('fans a map node out with bounded concurrency and item expressions', async () => {
     const fetch = tool({
       id: 'tool.fetch',
@@ -345,6 +365,60 @@ describe('static DAG control flow', () => {
     expect(outcome.state.output).toBe('published:hello');
   });
 
+  it('validates resolved subgraph input before invoking child capabilities', async () => {
+    let calls = 0;
+    const accept = tool({
+      id: 'tool.accept-integer',
+      input: z.object({ value: z.number().int() }).strict(),
+      output: z.number().int(),
+      execute: ({ value }) => {
+        calls += 1;
+        return value;
+      },
+    });
+    const child: DAGSpec = {
+      schemaVersion: 1,
+      id: 'integer_child',
+      name: 'Integer child',
+      description: '',
+      inputSchema: { type: 'integer' },
+      artifacts: {},
+      nodes: [
+        capabilityNode('accept', 'tool.accept-integer', {
+          value: { $expr: { type: 'graph-input', path: [] } },
+        }),
+      ],
+      edges: [],
+      output: nodeOutput('accept'),
+    };
+    const graph: DAGSpec = {
+      schemaVersion: 1,
+      id: 'invalid_nested_input',
+      name: 'Invalid nested input',
+      description: '',
+      artifacts: {},
+      nodes: [
+        {
+          id: 'nested',
+          kind: 'subgraph',
+          description: '',
+          graph: child,
+          input: graphInput('value'),
+          artifactInputs: [],
+          artifactOutputs: [],
+        },
+      ],
+      edges: [],
+      output: nodeOutput('nested'),
+    };
+
+    const outcome = await runStatic(graph, { value: 'not-an-integer' }, [accept]);
+
+    expect(outcome.status).toBe('failed');
+    expect(calls).toBe(0);
+    expect(outcome.state.error).toMatch(/inputSchema/u);
+  });
+
   it('returns the last bounded loop value when its condition remains false', async () => {
     const increment = tool({
       id: 'tool.increment',
@@ -397,6 +471,62 @@ describe('static DAG control flow', () => {
 
     expect(outcome.status, outcome.state.error).toBe('completed');
     expect(outcome.state.output).toEqual({ n: 4 });
+  });
+
+  it('validates every loop-body input before the next capability call', async () => {
+    const calls: number[] = [];
+    const stringify = tool({
+      id: 'tool.stringify-iteration',
+      input: z.object({ value: z.number().int() }).strict(),
+      output: z.string(),
+      execute: ({ value }) => {
+        calls.push(value);
+        return String(value);
+      },
+    });
+    const body: DAGSpec = {
+      schemaVersion: 1,
+      id: 'integer_to_string',
+      name: 'Integer to string',
+      description: '',
+      inputSchema: { type: 'integer' },
+      artifacts: {},
+      nodes: [
+        capabilityNode('stringify', 'tool.stringify-iteration', {
+          value: { $expr: { type: 'graph-input', path: [] } },
+        }),
+      ],
+      edges: [],
+      output: nodeOutput('stringify'),
+    };
+    const graph: DAGSpec = {
+      schemaVersion: 1,
+      id: 'invalid_second_iteration',
+      name: 'Invalid second iteration',
+      description: '',
+      artifacts: {},
+      nodes: [
+        {
+          id: 'repeat',
+          kind: 'loop',
+          description: '',
+          graph: body,
+          input: graphInput('start'),
+          until: { operator: 'eq', left: { $expr: { type: 'item', path: [] } }, right: 'stop' },
+          maxIterations: 2,
+          artifactInputs: [],
+          artifactOutputs: [],
+        },
+      ],
+      edges: [],
+      output: nodeOutput('repeat'),
+    };
+
+    const outcome = await runStatic(graph, { start: 1 }, [stringify]);
+
+    expect(outcome.status).toBe('failed');
+    expect(calls).toEqual([1]);
+    expect(outcome.state.error).toMatch(/inputSchema/u);
   });
 
   it('requires review for high-risk capabilities nested in a subgraph', async () => {
@@ -514,6 +644,30 @@ describe('control-flow validation', () => {
       expect(invalidItem.issues[0]?.message).toMatch(/only valid inside map and loop/u);
     }
   });
+
+  it('rejects malformed condition branch edges', () => {
+    const graph = conditionBranchingGraph();
+    const missingBranch = validateDag({
+      ...graph,
+      edges: graph.edges.map((edge) =>
+        edge.from === 'route' && edge.to === 'publish' ? { from: edge.from, to: edge.to } : edge,
+      ),
+    });
+    const unknownBranch = validateDag({
+      ...graph,
+      edges: graph.edges.map((edge) =>
+        edge.from === 'route' && edge.to === 'publish' ? { ...edge, branch: 'unknown' } : edge,
+      ),
+    });
+    const branchOnCapability = validateDag({
+      ...graph,
+      edges: [{ from: 'score', to: 'route', branch: 'publish' }, ...graph.edges.slice(1)],
+    });
+
+    expect(missingBranch.valid).toBe(false);
+    expect(unknownBranch.valid).toBe(false);
+    expect(branchOnCapability.valid).toBe(false);
+  });
 });
 
 function branchingGraph(): DAGSpec {
@@ -551,6 +705,79 @@ function branchingGraph(): DAGSpec {
           right: 0.8,
         },
       },
+      { from: 'publish', to: 'join' },
+      { from: 'revise', to: 'join' },
+    ],
+    output: nodeOutput('join'),
+  };
+}
+
+function conditionBranchingGraph(): DAGSpec {
+  return {
+    schemaVersion: 1,
+    id: 'condition_branching',
+    name: 'Condition branching',
+    description: '',
+    artifacts: {},
+    nodes: [
+      capabilityNode('score', 'tool.score', { text: graphInput('text') }),
+      {
+        id: 'route',
+        kind: 'condition',
+        description: '',
+        cases: [
+          {
+            branch: 'publish',
+            when: {
+              operator: 'all',
+              conditions: [
+                {
+                  operator: 'gte',
+                  left: nodeOutput('score', 'score'),
+                  right: 0.5,
+                },
+                {
+                  operator: 'any',
+                  conditions: [
+                    {
+                      operator: 'eq',
+                      left: nodeOutput('score', 'score'),
+                      right: 0.9,
+                    },
+                    {
+                      operator: 'eq',
+                      left: nodeOutput('score', 'score'),
+                      right: 1,
+                    },
+                  ],
+                },
+                {
+                  operator: 'not',
+                  condition: {
+                    operator: 'lt',
+                    left: nodeOutput('score', 'score'),
+                    right: 0.5,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        defaultBranch: 'revise',
+        artifactInputs: [],
+        artifactOutputs: [],
+      },
+      capabilityNode('publish', 'tool.publish', { content: graphInput('text') }),
+      capabilityNode('revise', 'tool.revise', { content: graphInput('text') }),
+      capabilityNode('join', 'tool.render', {
+        a: nodeOutput('publish'),
+        b: nodeOutput('revise'),
+      }),
+    ],
+    edges: [
+      { from: 'score', to: 'route' },
+      { from: 'route', to: 'publish', branch: 'publish' },
+      { from: 'route', to: 'revise', branch: 'revise' },
       { from: 'publish', to: 'join' },
       { from: 'revise', to: 'join' },
     ],

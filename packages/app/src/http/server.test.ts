@@ -42,13 +42,64 @@ describe('HTTP application', () => {
       url: '/api/v1/conversations',
       payload: { projectId: project.id, title: 'First conversation' },
     });
+    const standaloneResponse = await application.server.inject({
+      method: 'POST',
+      url: '/api/v1/conversations',
+      payload: { title: 'Standalone conversation', workspaceScope: 'standalone' },
+    });
 
     expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: 'ok', version: '0.9.5' });
     expect(projectResponse.statusCode).toBe(201);
     expect(conversationResponse.statusCode).toBe(201);
     expect(
       conversationResponse.json<{ conversation: { items: unknown[] } }>().conversation.items,
     ).toEqual([]);
+    expect(standaloneResponse.statusCode).toBe(201);
+    expect(standaloneResponse.json()).toMatchObject({ workspaceScope: 'standalone' });
+    expect(standaloneResponse.json()).not.toHaveProperty('projectId');
+    await application.close();
+  });
+
+  it('exposes design-only DAG inspection and provider lifecycle events', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dagent-http-design-'));
+    temporaryDirectories.push(directory);
+    const application = await createApplication({
+      config: appConfigSchema.parse({ dataDirectory: directory }),
+      provider: new MockProvider([
+        {
+          content: JSON.stringify({ action: 'answer', answer: 'This design has no execution.' }),
+          reasoningContent: '',
+          refusal: '',
+          toolCalls: [],
+        },
+      ]),
+      logger: false,
+    });
+
+    const inspection = await application.server.inject({
+      method: 'POST',
+      url: '/api/v1/dags/inspect',
+      payload: { graph: { schemaVersion: 1, id: 'empty', name: 'Empty', nodes: [], edges: [] } },
+    });
+    const design = await application.server.inject({
+      method: 'POST',
+      url: '/api/v1/dags/design',
+      payload: { instruction: 'Explain the design boundary.' },
+    });
+
+    expect(inspection.statusCode).toBe(200);
+    expect(inspection.json()).toEqual({ diagnostics: [] });
+    expect(design.statusCode).toBe(200);
+    expect(design.json()).toMatchObject({
+      result: { type: 'answer', answer: 'This design has no execution.' },
+      events: [
+        { type: 'response-started', sequence: 1 },
+        { type: 'response-finished', sequence: 2 },
+        { type: 'validation-started', sequence: 3 },
+        { type: 'validation-passed', sequence: 4 },
+      ],
+    });
     await application.close();
   });
 

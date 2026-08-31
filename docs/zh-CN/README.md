@@ -3,7 +3,7 @@
 [English documentation](../en/README.md)
 
 这里是 `dagent-ai` SDK、`dagent-ai-app` 本地 Host 和 React 工作台的文档入口。
-文档以 TypeScript 公开契约和 0.8.3 实际行为为准，不把 Python API 机械替换成
+文档以 TypeScript 公开契约和 0.9.5 实际行为为准，不把 Python API 机械替换成
 TypeScript 拼写。
 
 ## 从这里开始
@@ -18,16 +18,17 @@ TypeScript 拼写。
 
 ## 功能指南
 
-| 主题                                           | 文档                                                  |
-| ---------------------------------------------- | ----------------------------------------------------- |
-| Runner、Provider、YAML、MCP、Profiles、Sandbox | [Runner 和配置](runner-and-configuration.md)          |
-| ToolAgent、DagAgent、AutoAgent                 | [Agents](agents.md)                                   |
-| 内置能力、自定义 TypeScript Tool、MCP、边界    | [Capabilities](capabilities.md)                       |
-| `DagBuilder`、引用、map、subgraph、loop        | [静态 DAG](static-dag.md)                             |
-| Skill roots、managed installs 与 Skill 能力    | [Skills](skills.md)                                   |
-| 多轮会话、上下文、流式事件、大结果和审核       | [会话、结果、流式与审核](results-streaming-review.md) |
-| V3 权威历史与公共投影                          | [会话历史与上下文](conversation-history.md)           |
-| SDK、Host、数据库和 Web 分层                   | [架构](architecture.md)                               |
+| 主题                                              | 文档                                                  |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| Runner、Provider、YAML、MCP、Profiles、Sandbox    | [Runner 和配置](runner-and-configuration.md)          |
+| ToolAgent、DagAgent、AutoAgent                    | [Agents](agents.md)                                   |
+| 内置能力、自定义 TypeScript Tool、MCP、边界       | [Capabilities](capabilities.md)                       |
+| `DagBuilder`、condition 路由、map、subgraph、loop | [静态 DAG](static-dag.md)                             |
+| 不运行地设计、修改、检查或解释 DAG                | [非执行 DAG 设计](dag-design.md)                      |
+| Skill roots、managed installs 与 Skill 能力       | [Skills](skills.md)                                   |
+| 多轮会话、上下文、流式事件、大结果和审核          | [会话、结果、流式与审核](results-streaming-review.md) |
+| V3 权威历史与公共投影                             | [会话历史与上下文](conversation-history.md)           |
+| SDK、Host、数据库和 Web 分层                      | [架构](architecture.md)                               |
 
 ## Host 与运维
 
@@ -38,6 +39,7 @@ TypeScript 拼写。
 | 0.8 Host 数据与请求迁移            | [SDK 0.8 Host 迁移](host-migration-0.8.md) |
 | 版本差异和升级动作                 | [迁移说明](migration.md)                   |
 | 常见配置与运行错误                 | [故障排查](troubleshooting.md)             |
+| 本地 ToolAgent 桌面端与安全边界    | [DagentWork 桌面端](desktop.md)            |
 
 ## 文档约定
 

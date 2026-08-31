@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { z } from 'zod';
 
@@ -11,6 +12,7 @@ import {
   artifactStatesSchema,
   conversationStateSchema,
   contextPolicySchema,
+  createInvocationId,
   createRunId,
   createReviewId,
   dagNodeResultSchema,
@@ -30,6 +32,7 @@ import {
   validationRecordSchema,
   formatValidationFeedback,
   storedContentText,
+  defineDagAgent,
 } from './contracts/index.js';
 import type {
   AgentProfile,
@@ -40,10 +43,12 @@ import type {
   ContextPolicy,
   ConversationState,
   DAGSpec,
+  DagDesignEvent,
+  DagDesignResult,
+  DagDesignSelection,
   DagAgent,
   ExecutionLimits,
   JsonValue,
-  JsonObject,
   ResolvedRunPlan,
   ResultStoragePolicy,
   ReviewDecision,
@@ -58,6 +63,7 @@ import type {
   ValidationRecord,
 } from './contracts/index.js';
 import { assertValidDag } from './domain/dag-validation.js';
+import { validateDagInput } from './domain/dag-input-validation.js';
 import { reusableNodeResults } from './domain/dag-transition.js';
 import { DagentError, errorMessage } from './errors.js';
 import { sha256 } from './internal/stable-json.js';
@@ -67,8 +73,9 @@ import type { ChatProvider } from './providers/provider.js';
 import { ValidatorAgent } from './profiles/validator-agent.js';
 import { AsyncEventQueue } from './runtime/async-event-queue.js';
 import { ArtifactWorkspace } from './runtime/artifacts.js';
-import { DagExecutor } from './runtime/dag-executor.js';
+import { DagExecutor, StaticAgentReviewPause } from './runtime/dag-executor.js';
 import { DynamicPlanner } from './runtime/dynamic-planner.js';
+import { designDagRuntime, inspectDag } from './runtime/dag-design.js';
 import {
   ConversationResourceStore,
   materializeInputUploads,
@@ -83,16 +90,18 @@ import {
   resolvedAgentsForPlan,
   validateResolvedExecutionScope,
 } from './runtime/execution-scope.js';
+import { externalizeJsonValue } from './runtime/result-storage.js';
 import { ToolAgentRuntime } from './runtime/tool-agent.js';
 import type { AgentLoopResult, RuntimeExecutionContext } from './runtime/types.js';
 import { createSkillCapabilities, SkillStore } from './skills/index.js';
+import { loadBuiltinProfile } from './profiles/store.js';
 
 export type RunnerOptions = {
   readonly provider: ChatProvider;
   readonly capabilities?: readonly CapabilityBinding[];
   readonly agents?: readonly (ToolAgent | DagAgent | AutoAgent)[];
-  readonly workspace: string;
-  readonly runtimeDirectory: string;
+  readonly workspace?: string;
+  readonly runtimeDirectory?: string;
   readonly extraSystemPrompt?: string;
   readonly limits?: Partial<ExecutionLimits>;
   readonly context?: Partial<ContextPolicy>;
@@ -115,7 +124,7 @@ export type AgentRunInput = {
 };
 
 export type StaticDagRunInput = {
-  readonly graphInput?: JsonObject;
+  readonly graphInput?: JsonValue;
   readonly artifactUploads?: Readonly<Record<string, readonly ArtifactUpload[]>>;
 };
 
@@ -127,8 +136,18 @@ type PreparedRunInput = PreparedAgentRunInput | StaticDagRunInput;
 
 export type RunOptions = {
   readonly workspacePath?: string;
+  readonly workspaceRoot?: string;
   readonly signal?: AbortSignal;
   readonly limits?: Partial<ExecutionLimits>;
+};
+
+export type DagDesignOptions = {
+  readonly agent?: DagAgent;
+  readonly current?: DAGSpec;
+  readonly selection?: DagDesignSelection;
+  readonly conversation?: ConversationState;
+  readonly signal?: AbortSignal;
+  readonly onEvent?: (event: DagDesignEvent) => void | Promise<void>;
 };
 
 export class Runner implements AsyncDisposable {
@@ -161,8 +180,8 @@ export class Runner implements AsyncDisposable {
     this.mcp = new McpManager();
     this.catalog = new CapabilityCatalog(createSkillCapabilities(this.skills));
     for (const binding of options.capabilities ?? []) this.catalog.replace(binding);
-    this.#workspace = resolve(options.workspace);
-    this.#runtimeDirectory = runtimeDirectorySchema.parse(options.runtimeDirectory);
+    this.#workspace = resolve(options.workspace ?? join(homedir(), '.dagent'));
+    this.#runtimeDirectory = runtimeDirectorySchema.parse(options.runtimeDirectory ?? '.runtime');
     this.#extraSystemPrompt =
       options.extraSystemPrompt === undefined
         ? undefined
@@ -297,6 +316,61 @@ export class Runner implements AsyncDisposable {
     return true;
   }
 
+  public inspectDag(spec: DAGSpec): readonly ReturnType<typeof inspectDag>[number][] {
+    return inspectDag(spec);
+  }
+
+  public async designDag(
+    instruction: string,
+    options: DagDesignOptions = {},
+  ): Promise<DagDesignResult> {
+    this.#assertOpen();
+    const agent =
+      options.agent ??
+      defineDagAgent({
+        kind: 'dag-agent',
+        id: 'dag_design',
+        name: 'DAG Design',
+        description: 'Non-executing DAG design.',
+        systemPrompt: (await loadBuiltinProfile('dag_design')).content,
+        scope: {
+          capabilities: this.catalog
+            .definitions()
+            .filter(({ enabled }) => enabled)
+            .map(({ id }) => id),
+          agents: [...this.#agents.values()]
+            .filter((candidate): candidate is ToolAgent => candidate.kind === 'tool-agent')
+            .map(({ id }) => id),
+        },
+        reviewLevel: 'never',
+      });
+    return designDagRuntime({
+      provider: this.#provider,
+      catalog: this.catalog,
+      registeredAgents: new Map(
+        [...this.#agents.entries()].flatMap(([id, candidate]) =>
+          candidate.kind === 'tool-agent' ? [[id, candidate] as const] : [],
+        ),
+      ),
+      agent,
+      instruction,
+      contextWindowTokens:
+        this.#contextWindowTokens ??
+        readProviderNumber(this.#provider, 'contextWindowTokens', 32_768),
+      outputReserveTokens:
+        this.#outputReserveTokens ??
+        readProviderNumber(this.#provider, 'outputReserveTokens', 4096),
+      ...(options.current === undefined ? {} : { current: options.current }),
+      ...(options.selection === undefined ? {} : { selection: options.selection }),
+      ...(options.conversation === undefined ? {} : { conversation: options.conversation }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.onEvent === undefined ? {} : { onEvent: options.onEvent }),
+      ...(this.#extraSystemPrompt === undefined
+        ? {}
+        : { extraSystemPrompt: this.#extraSystemPrompt }),
+    });
+  }
+
   public async run(
     targetValue: RunTarget,
     input: RunInput,
@@ -415,6 +489,22 @@ export class Runner implements AsyncDisposable {
             'Capability review has no pending invocation.',
           );
         }
+        if (target.kind === 'static-dag') {
+          failureState = runStateSchema.parse({
+            ...checkpoint.state,
+            status: 'running',
+            pendingReview: undefined,
+            staticAgentContinuation: undefined,
+            revision: checkpoint.state.revision + 1,
+            updatedAt: nowTimestamp(),
+          });
+          return await this.#resumeStaticAgent(
+            checkpoint.state,
+            checkpoint.plan,
+            decision,
+            context,
+          );
+        }
         const agent = capabilityResumeAgent(target);
         const runtime = new ToolAgentRuntime();
         let result: AgentLoopResult;
@@ -427,7 +517,7 @@ export class Runner implements AsyncDisposable {
                 : { conversation: checkpoint.state.conversation }),
             },
             context,
-            { invocation: review.invocation, decision },
+            { invocation: review.invocation, decision, review },
           );
         } catch (error) {
           if (runtime.lastConversation !== undefined) {
@@ -533,6 +623,11 @@ export class Runner implements AsyncDisposable {
     this.#assertOpen();
     const target = runTargetSchema.parse(targetValue);
     if (isAgentInput(input)) assertAgentHistory(input);
+    if (target.kind === 'static-dag') {
+      assertValidDag(target.graph);
+      assertStaticAgentTopology(target.graph);
+      validateDagInput(target.graph, isAgentInput(input) ? {} : (input.graphInput ?? {}));
+    }
     const runId = createRunId();
     const controller = new AbortController();
     const signal =
@@ -542,8 +637,12 @@ export class Runner implements AsyncDisposable {
     this.#active.set(runId, controller);
     try {
       const workspacePath = resolve(
-        options.workspacePath ?? this.#workspace,
-        options.workspacePath === undefined ? `runs/${runId}` : '',
+        options.workspacePath ?? options.workspaceRoot ?? this.#workspace,
+        options.workspacePath !== undefined
+          ? ''
+          : options.workspaceRoot === undefined
+            ? `runs/${runId}`
+            : `${runId}/workspace`,
       );
       await mkdir(workspacePath, { recursive: true });
       const preparedInput: PreparedRunInput = isAgentInput(input)
@@ -570,7 +669,7 @@ export class Runner implements AsyncDisposable {
       );
       const timestamp = nowTimestamp();
       const initialState = runStateSchema.parse({
-        schemaVersion: 3,
+        schemaVersion: 4,
         runId,
         status: 'pending',
         targetKind: target.kind,
@@ -638,14 +737,16 @@ export class Runner implements AsyncDisposable {
           artifacts: target.graph.artifacts,
           previousStates: state.artifactStates,
         });
-        if (!isAgentInput(input) && input.artifactUploads !== undefined) {
-          await artifacts.materialize(input.artifactUploads);
-        }
+        const inputArtifactFiles =
+          !isAgentInput(input) && input.artifactUploads !== undefined
+            ? await artifacts.materialize(input.artifactUploads)
+            : [];
         const prepared = runStateSchema.parse({
           ...state,
           graph: target.graph,
           graphInput,
           artifactStates: artifacts.snapshot(),
+          inputArtifactFiles,
           revision: state.revision + 1,
           updatedAt: nowTimestamp(),
         });
@@ -764,7 +865,7 @@ export class Runner implements AsyncDisposable {
   ): Promise<RunOutcome> {
     assertGraphWithinPlan(graph, plan);
     const executionAgents = resolvedAgentsForPlan(plan, this.#agents);
-    const executor = new DagExecutor(async (agentId, prompt, nestedContext) => {
+    const executor = new DagExecutor(async (_nodeId, agentId, prompt, nestedContext) => {
       const agent = executionAgents.get(agentId);
       if (agent === undefined) {
         throw new DagentError(
@@ -773,25 +874,36 @@ export class Runner implements AsyncDisposable {
         );
       }
       const result = await new ToolAgentRuntime().run(
-        { ...agent, reviewLevel: 'never' },
+        state.targetKind === 'static-dag' ? agent : { ...agent, reviewLevel: 'never' },
         { prompt },
         nestedContext,
       );
       if (result.status === 'awaiting-review') {
-        throw new DagentError(
-          'CHECKPOINT_MISMATCH',
-          `Approved nested agent '${agentId}' unexpectedly requested review.`,
-        );
+        if (state.targetKind !== 'static-dag') {
+          throw new DagentError(
+            'CHECKPOINT_MISMATCH',
+            `Approved nested agent '${agentId}' unexpectedly requested review.`,
+          );
+        }
+        return {
+          status: 'awaiting-review' as const,
+          conversation: result.conversation,
+          review: result.review,
+        };
       }
-      return result.output;
+      return { status: 'completed' as const, output: result.output };
     });
     let result: Awaited<ReturnType<DagExecutor['execute']>>;
     try {
       result = await executor.execute(state.graphInput, graph, context, {
         previousResults: state.nodeResults,
         previousArtifactStates: state.artifactStates,
+        inputArtifactFiles: state.inputArtifactFiles,
       });
     } catch (error) {
+      if (error instanceof StaticAgentReviewPause) {
+        return this.#staticAgentReviewOutcome(state, plan, budget, emitter, error);
+      }
       const details = error instanceof DagentError ? error.details : {};
       const partialState = runStateSchema.parse({
         ...state,
@@ -837,6 +949,133 @@ export class Runner implements AsyncDisposable {
       updatedAt: nowTimestamp(),
     });
     return this.#finalize(completed, plan, budget, emitter);
+  }
+
+  async #resumeStaticAgent(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    decision: ReviewDecision,
+    context: RuntimeExecutionContext,
+  ): Promise<RunOutcome> {
+    const continuation = state.staticAgentContinuation;
+    const review = state.pendingReview;
+    if (
+      continuation === undefined ||
+      review?.kind !== 'capability-review' ||
+      review.invocation === undefined
+    ) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        'Static DAG capability review has no valid agent continuation.',
+      );
+    }
+    const agent = resolvedAgentsForPlan(plan, this.#agents).get(continuation.agentId);
+    if (agent === undefined) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        `Static DAG agent '${continuation.agentId}' is unavailable.`,
+      );
+    }
+    const result = await new ToolAgentRuntime().run(
+      agent,
+      { conversation: continuation.conversation },
+      context,
+      { invocation: review.invocation, decision, review },
+    );
+    const resumedState = runStateSchema.parse({
+      ...state,
+      status: 'running',
+      contextUsage: [...state.contextUsage, ...result.contextUsage],
+      pendingReview: undefined,
+      staticAgentContinuation: undefined,
+      revision: state.revision + 1,
+      updatedAt: nowTimestamp(),
+    });
+    if (result.status === 'awaiting-review') {
+      return this.#staticAgentReviewOutcome(
+        resumedState,
+        plan,
+        context.budget,
+        context.events,
+        new StaticAgentReviewPause(
+          continuation.nodeId,
+          continuation.agentId,
+          result.conversation,
+          result.review,
+        ),
+      );
+    }
+    const stored = await externalizeJsonValue(result.output, {
+      workspacePath: context.workspacePath,
+      runtimeDirectory: context.runtimeDirectory,
+      key: `node-${continuation.nodeId}-${createInvocationId()}`,
+      policy: context.resultStoragePolicy,
+    });
+    const nodeResult = dagNodeResultSchema.parse({
+      nodeId: continuation.nodeId,
+      status: 'completed',
+      output: stored.value,
+      ...(stored.reference === undefined
+        ? {}
+        : { valueReference: stored.reference, references: [stored.reference] }),
+      content:
+        stored.reference?.preview ??
+        (typeof result.output === 'string' ? result.output : JSON.stringify(result.output)),
+      completedAt: nowTimestamp(),
+    });
+    const executing = runStateSchema.parse({
+      ...resumedState,
+      nodeResults: { ...resumedState.nodeResults, [continuation.nodeId]: nodeResult },
+    });
+    await context.events.emit({ type: 'node-completed', result: nodeResult });
+    if (executing.graph === undefined) {
+      throw new DagentError('CHECKPOINT_MISMATCH', 'Static DAG continuation has no graph.');
+    }
+    return this.#executeApprovedGraph(
+      executing,
+      plan,
+      context.budget,
+      context.events,
+      context,
+      executing.graph,
+    );
+  }
+
+  async #staticAgentReviewOutcome(
+    state: RunState,
+    plan: ResolvedRunPlan,
+    budget: ExecutionBudget,
+    emitter: RunEventEmitter,
+    pause: StaticAgentReviewPause,
+  ): Promise<RunOutcome> {
+    const invocation = pause.review.invocation;
+    if (invocation === undefined) {
+      throw new DagentError(
+        'CHECKPOINT_MISMATCH',
+        'Static agent review does not contain a pending invocation.',
+      );
+    }
+    const awaiting = runStateSchema.parse({
+      ...state,
+      status: 'awaiting-review',
+      nodeResults:
+        Object.keys(pause.nodeResults).length === 0 ? state.nodeResults : pause.nodeResults,
+      artifactStates:
+        Object.keys(pause.artifactStates).length === 0
+          ? state.artifactStates
+          : pause.artifactStates,
+      pendingReview: pause.review,
+      staticAgentContinuation: {
+        nodeId: pause.nodeId,
+        agentId: pause.agentId,
+        invocation,
+        conversation: pause.conversation,
+        graphInput: state.graphInput,
+      },
+      revision: state.revision + 1,
+      updatedAt: nowTimestamp(),
+    });
+    return this.#finalize(awaiting, plan, budget, emitter);
   }
 
   async #replanAfterReviewedFailure(
@@ -1094,7 +1333,7 @@ export class Runner implements AsyncDisposable {
       await this.#conversationResources.persist(state.conversation, state.workspacePath);
     }
     const checkpoint = runCheckpointSchema.parse({
-      schemaVersion: 4,
+      schemaVersion: 5,
       state,
       plan,
       usage: budget.snapshot(),
@@ -1193,6 +1432,7 @@ export class Runner implements AsyncDisposable {
       runId,
       provider: this.#provider,
       catalog: this.catalog,
+      skills: this.skills,
       budget,
       events,
       workspacePath,
@@ -1323,7 +1563,7 @@ async function createResolvedPlan(
 ): Promise<ResolvedRunPlan> {
   const scope = await resolveExecutionScope(target, catalog, agents, skills);
   const payload = resolvedRunPlanPayloadSchema.parse({
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     target,
     ...scope,
     limits,
@@ -1399,6 +1639,20 @@ function requiresDagReview(
   if (level === 'never') return false;
   if (level === 'always') return true;
   return graphRequiresRiskReview(graph, catalog, agents);
+}
+
+function assertStaticAgentTopology(graph: DAGSpec, nested = false): void {
+  for (const node of graph.nodes) {
+    if (node.kind === 'agent' && nested) {
+      throw new DagentError(
+        'INVALID_INPUT',
+        `Static DAG agent node '${node.id}' must be a direct top-level node; agent continuation inside Map, Subgraph, or Loop is unsupported.`,
+      );
+    }
+    if (node.kind === 'subgraph' || node.kind === 'map' || node.kind === 'loop') {
+      assertStaticAgentTopology(node.graph, true);
+    }
+  }
 }
 
 function capabilityResumeAgent(target: RunTarget): ToolAgent {

@@ -1,4 +1,5 @@
 import type { ConversationState, ReviewDecision, RunCheckpoint, RunEvent, RunId } from 'dagent-ai';
+import { DagentError } from 'dagent-ai';
 import { conversationStateSchema, runCheckpointSchema, runEventSchema } from 'dagent-ai/contracts';
 import { z } from 'zod';
 
@@ -17,10 +18,12 @@ export type Project = {
 };
 
 export type ConversationKind = 'chat' | 'dynamic-dag' | 'static-dag';
+export type WorkspaceScope = 'project' | 'standalone';
 
 export type Conversation = {
   readonly id: string;
-  readonly projectId: string;
+  readonly projectId?: string;
+  readonly workspaceScope: WorkspaceScope;
   readonly title: string;
   readonly kind: ConversationKind;
   readonly schemaVersion: 3 | 'legacy';
@@ -165,16 +168,29 @@ export class AppRepository {
   }
 
   public async createConversation(input: {
-    readonly projectId: string;
+    readonly projectId?: string;
     readonly title: string;
     readonly kind?: ConversationKind;
+    readonly workspaceScope?: WorkspaceScope;
   }): Promise<Conversation> {
     const timestamp = new Date().toISOString();
     const id = `conversation_${crypto.randomUUID()}`;
     const conversation = conversationStateSchema.parse({ schemaVersion: 3, id });
+    const workspaceScope =
+      input.workspaceScope ?? (input.projectId === undefined ? 'standalone' : 'project');
+    if (
+      (workspaceScope === 'project' && input.projectId === undefined) ||
+      (workspaceScope === 'standalone' && input.projectId !== undefined)
+    ) {
+      throw new DagentError(
+        'INVALID_INPUT',
+        'Project conversations require projectId; standalone conversations must not include it.',
+      );
+    }
     const row: ConversationTable = {
       id,
-      project_id: input.projectId,
+      project_id: input.projectId ?? null,
+      workspace_scope: workspaceScope,
       title: input.title,
       kind: input.kind ?? 'chat',
       schema_version: 3,
@@ -471,7 +487,8 @@ function readConversation(row: ConversationTable): Conversation {
     parsed?.success === true && parsed.data.id === row.id ? parsed.data : undefined;
   return {
     id: row.id,
-    projectId: row.project_id,
+    ...(row.project_id === null ? {} : { projectId: row.project_id }),
+    workspaceScope: z.enum(['project', 'standalone']).parse(row.workspace_scope),
     title: row.title,
     kind: conversationKindSchema.parse(row.kind),
     schemaVersion: conversation === undefined ? 'legacy' : 3,

@@ -1,6 +1,6 @@
 {
   "name": "dagent-ai-app",
-  "version": "0.8.3",
+  "version": "0.9.5",
   "description": "Local API, CLI, and Web UI host for dagent-ai",
   "type": "module",
   "license": "Apache-2.0",

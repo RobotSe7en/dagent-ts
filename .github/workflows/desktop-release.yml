@@ -1,0 +1,95 @@
+name: Desktop release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: windows-2025
+            platform: win32
+            arch: x64
+          - runner: windows-11-arm
+            platform: win32
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter dagent-ai build
+      - run: pnpm --filter dagent-ai-app build
+      - run: pnpm --filter @dagent/desktop-host package
+      - run: node apps/desktop/scripts/stage-platform.mjs ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Archive platform payload
+        shell: bash
+        run: tar -czf desktop-${{ matrix.platform }}-${{ matrix.arch }}.tgz -C packages/desktop-${{ matrix.platform }}-${{ matrix.arch }} dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: desktop-${{ matrix.platform }}-${{ matrix.arch }}.tgz
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: artifacts
+      - name: Restore platform payloads
+        shell: bash
+        run: |
+          for artifact in artifacts/desktop-*; do
+            target="${artifact#artifacts/desktop-}"
+            mkdir -p "packages/desktop-${target}"
+            tar -xzf "${artifact}/desktop-${target}.tgz" -C "packages/desktop-${target}"
+          done
+      - name: Publish platform packages
+        run: pnpm --filter './packages/desktop-*' publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish launcher
+        run: pnpm --filter dagent-ai-desktop publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

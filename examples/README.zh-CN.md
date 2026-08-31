@@ -22,6 +22,37 @@ node --experimental-strip-types examples/basic.ts
 - `await using` Runner 生命周期
 - `AsyncIterable<RunEvent>` 流式输出
 
+## Condition 路由
+
+```bash
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/condition-routing.ts
+```
+
+[`condition-routing.ts`](condition-routing.ts) 是离线静态 DAG 示例，展示有序 cases、组合
+条件、互斥 branch edges 与精确结构化输出。
+
+## 非执行 DAG 设计
+
+```bash
+export OPENAI_API_KEY=...
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/dag-design.ts
+```
+
+[`dag-design.ts`](dag-design.ts) 先在本地校验图，再以选中 node 作为聚焦提示调用纯设计 API，
+并观察生命周期事件；它不会执行图。
+
+## Artifact 文件清单
+
+```bash
+pnpm --filter dagent-ai build
+node --experimental-strip-types examples/static-dag-artifact-files.ts
+```
+
+[`static-dag-artifact-files.ts`](static-dag-artifact-files.ts) 是离线示例，展示有界的静态输入
+上传与确定的 `ArtifactRef.files()` 清单。
+
 ## App configuration
 
 [`dagent.yaml`](dagent.yaml) 是 `dagent-ai-app` 的完整起始配置：

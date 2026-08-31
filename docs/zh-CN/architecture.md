@@ -52,7 +52,7 @@ flowchart LR
   Plan --> Validate["DAG validation"]
   Validate --> Review{"review?"}
   Review -->|approve/not required| Exec
-  Review -->|required| Checkpoint["V4 checkpoint"]
+  Review -->|required| Checkpoint["V5 checkpoint"]
   Tool --> Catalog["CapabilityCatalog"]
   Exec --> Catalog
   Tool --> State["RunState + ConversationState"]
@@ -74,7 +74,7 @@ flowchart LR
 - `CapabilityBinding<TInput, TOutput>` 将 Zod schema、执行函数和边界元数据绑定。
 - `DAGSpec` 是唯一执行图格式。节点支持 capability、agent、subgraph、map 和 bounded
   loop。
-- `RunState` 是 V3 当前状态；V4 `RunCheckpoint` 冻结目标、能力作用域、限制、
+- `RunState` 是 V4 当前状态；V5 `RunCheckpoint` 冻结目标、能力作用域、限制、
   `runtimeDirectory`、初始 `extraSystemPrompt` 和状态。
 - `RunEvent` 是带运行 ID、序号和时间戳的判别联合。
 - `ConversationState` 是 Provider-neutral 的历史记录。
@@ -85,7 +85,7 @@ flowchart LR
 
 - canonical DAG：schema version 1
 - `ConversationState` / `RunState`：V3
-- `ResolvedRunPlan` / `RunCheckpoint`：V4
+- `ResolvedRunPlan` / `RunCheckpoint`：V5
 
 版本号不同是因为这些契约独立演进。Host 不应把它们合并成一个数据库 schema version。
 
@@ -98,7 +98,8 @@ flowchart LR
 复用；失败节点允许替换或重跑。审核使用 checkpoint fingerprint，过期 revision 会被
 拒绝。审核后的执行若失败并重新规划到下一个审核边界，权威会话 revision 会严格推进。
 
-SDK 要求 Host 显式传入 `workspace` 和安全相对的 `runtimeDirectory`。会话资源位于
+SDK 默认使用 `workspace=~/.dagent` 与安全相对的 `runtimeDirectory=.runtime`；负责
+持久化的 Host 显式传入两者。会话资源位于
 `<workspace>/<runtimeDirectory>/conversations`；外置结果和恢复历史分别位于每次运行
 工作区的 `<runtimeDirectory>/results` 与 `<runtimeDirectory>/history`，且按需创建。
 

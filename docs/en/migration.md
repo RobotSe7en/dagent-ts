@@ -6,12 +6,108 @@ than replace symbols mechanically.
 
 ## Current Release Line
 
-| Version | Contracts                                                       |
-| ------- | --------------------------------------------------------------- |
-| 0.8.3   | V3 Conversation/Run state, V4 plan/checkpoint, canonical DAG v1 |
-| 0.8.0   | First complete TypeScript 0.8 baseline                          |
+| Version | Contracts                                                                 |
+| ------- | ------------------------------------------------------------------------- |
+| 0.9.5   | Observable design streams, visible design responses, DagentWork desktop   |
+| 0.9.4   | Non-executing DAG design and same-run approved boundary paths             |
+| 0.9.3   | Artifact file manifests, V4 RunState, and V5 plans/checkpoints            |
+| 0.9.2   | Resumable direct ToolAgent nodes in top-level static DAGs                 |
+| 0.9.1   | Deterministic, budgeted Skill routing index in ToolAgent prompts          |
+| 0.9.0   | Canonical DAG v1 with condition nodes, branch edges, and validated inputs |
+| 0.8.3   | V3 Conversation/Run state and V4 plan/checkpoint                          |
+| 0.8.0   | First complete TypeScript 0.8 baseline                                    |
 
 See the [CHANGELOG](../../CHANGELOG.md) for detailed changes.
+
+## 0.9.5
+
+Passing `onEvent` to `runner.designDag()` consumes the provider stream and reports response and
+validation lifecycle events. Calls without a listener retain the 0.9.4 non-streaming `chat`
+transport. The built-in `dag_design` profile is design-only and is never exposed as an executable
+capability. Returned conversations persist the natural summary, answer, or deterministic failure
+message, not the provider's structured JSON.
+
+The TypeScript workspace also adds the DagentWork local desktop. It has its own SQLite and managed
+standalone workspaces and exposes only ToolAgent execution, local resources, review, files, and
+observed changes. It deliberately omits every DAG and enterprise surface. See
+[DagentWork Desktop](desktop.md).
+
+## 0.9.4
+
+`runner.designDag()` returns a discriminated proposal/no-change/answer/failure result, and
+`runner.inspectDag()` returns deterministic diagnostics. A design call may call the provider but
+never invokes a capability or creates a run, review, checkpoint, result, artifact, or workspace
+write. The App adds `/api/v1/dags/design` and `/api/v1/dags/inspect`; the Web DAG Studio consumes
+those explicit design-only endpoints. See [Non-Executing DAG Design](dag-design.md).
+
+Reviewable allowed-path violations now report normalized paths in `PendingReview.metadata`.
+Approval authorizes only those paths for later ToolAgent calls in the same resumable run. A different
+path still requires review, authorization never becomes cross-run/project/user policy, and hard
+workspace escapes remain blocked. This is an intentional TypeScript contract expression of Python's
+`boundary_paths`: existing metadata is extended instead of adding a parallel review payload shape.
+
+## 0.9.3
+
+Static-DAG input uploads now persist a sorted `ArtifactFileManifest`. The `artifact.files`
+expression exposes upload-time `ArtifactFileRef` values with workspace-relative `path`, basename
+`name`, byte `size`, and optional `mediaType`. It is not a workspace scan. Upload materialization
+rejects traversal, duplicates, symlinked destinations, more than 256 files, a file over 25 MiB, or
+more than 100 MiB total.
+
+New runs use V4 `RunState` and V5 `ResolvedRunPlan`/`RunCheckpoint`. A legacy V4 checkpoint with V3
+state remains accepted and has an explicitly empty manifest; resume never reconstructs it by
+scanning files. Persist the V5 checkpoint produced by a successful continuation.
+
+## 0.9.2
+
+A direct top-level static-DAG agent node may target a registered ToolAgent and pause/resume its inner
+tool review. The checkpoint fingerprints the direct Agent configuration and suspended invocation.
+Ordinary static capability nodes remain directly authorized by the graph author. Agent nodes inside
+subgraphs, maps, or loops are rejected before execution because nested progress is not yet safely
+restorable.
+
+## 0.9.1
+
+ToolAgent prompts include a deterministic, sorted index for their resolved Skill scope. Complete
+name/description entries have an 8,000-character budget, name-only fallbacks have a separate
+2,000-character budget, and omitted entries direct the model to `skill.list`. Full `SKILL.md`
+content remains loaded on demand with `skill.view`; dynamic DAG planner prompts are unchanged.
+
+## 0.9.0
+
+### Condition Routing
+
+`DagNode` adds the `kind: "condition"` variant with ordered `cases` and a required
+`defaultBranch`. `DagEdge.branch` connects the selected branch to one or more downstream nodes;
+`DagNodeResult.selectedBranch` persists the decision. Hosts and exhaustive decoders must accept
+these optional/new variants before loading a 0.9 DAG or checkpoint.
+
+Use `DagBuilder.condition(...)` and `addEdge(..., { branch })`. `allOf`, `anyOf`, and
+`notCondition` compose conditions. Ordinary `condition` edges remain independent gates: a branch
+edge must originate at a condition node, and one edge cannot declare both forms.
+
+### Static Input And Output
+
+Static `graphInput` now accepts any `JsonValue`. Declared input schemas must be valid,
+self-contained JSON Schema Draft 2020-12 documents. Runner validates root input before workspace
+creation and validates resolved subgraph and loop inputs before child capability execution.
+`DagInputValidationError` exposes instance `path` and `schemaPath`.
+
+Exact structured static output remains available as `RunOutcome.output` and in V3 run state and V4
+checkpoints. No stored-DAG database migration is required.
+
+### Runner Defaults And Profiles
+
+`workspace` and `runtimeDirectory` are now optional and default to `~/.dagent` and `.runtime`.
+Storage-owning hosts should keep passing explicit values. The built-in `conversation` profile is
+now limited to direct response and bounded tool selection; DAG planning remains owned by DagAgent.
+
+### Compatibility
+
+Existing capability, agent, subgraph, map, loop, and ordinary conditional-edge graphs retain their
+behavior. The canonical schema version remains 1, and conversation/checkpoint versions remain V3
+and V4. The breaking surface is limited to consumers that exhaustively decode node/edge/result
+unions without accepting the 0.9 variants.
 
 ## 0.8.3
 
@@ -70,19 +166,22 @@ assume one run updates a conversation only once.
 Content, value, and artifact references are bounded and deduplicated in model projections. Prompts
 that relied on earlier duplicate injection should reference content explicitly once.
 
-## Migrating from Python Dagent 0.8.3
+## Migrating from Python Dagent 0.9.5
 
 ### Package and Language Boundaries
 
-| Python concept     | TypeScript entry                                               |
-| ------------------ | -------------------------------------------------------------- |
-| Runner             | `new Runner(options)`                                          |
-| function tool      | `tool({ input: zod, output: zod, execute })`                   |
-| Agent config       | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
-| static DAG builder | `DagBuilder<TInput, TOutput>`                                  |
-| async event stream | `for await (const event of runner.stream(...))`                |
-| Pydantic boundary  | Zod schema                                                     |
-| context manager    | `await using` / `try...finally`                                |
+| Python concept                    | TypeScript entry                                               |
+| --------------------------------- | -------------------------------------------------------------- |
+| Runner                            | `new Runner(options)`                                          |
+| function tool                     | `tool({ input: zod, output: zod, execute })`                   |
+| Agent config                      | `defineToolAgent()` / `defineDagAgent()` / `defineAutoAgent()` |
+| static DAG builder                | `DagBuilder<TInput, TOutput>`                                  |
+| `ConditionNode`                   | `builder.condition(...)` plus `{ branch }` edge options        |
+| `all_of` / `any_of` / `not_`      | `allOf` / `anyOf` / `notCondition`                             |
+| async event stream                | `for await (const event of runner.stream(...))`                |
+| `design_dag` / `inspect_dag_spec` | `runner.designDag()` / `runner.inspectDag()`                   |
+| Pydantic boundary                 | Zod schema                                                     |
+| context manager                   | `await using` / `try...finally`                                |
 
 Do not reproduce a Python class hierarchy as TypeScript classes. Agents and domain contracts should
 remain immutable data. Mutable lifecycles belong to Runner, Manager, Store, and host services.

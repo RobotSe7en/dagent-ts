@@ -8,6 +8,7 @@ import type {
 } from 'dagent-ai';
 import { DagentError, type Runner } from 'dagent-ai';
 import { reviewDecisionSchema, runIdSchema, runTargetSchema } from 'dagent-ai/contracts';
+import { join } from 'node:path';
 
 import { requireConversationState, type AppRepository } from '../database/repositories.js';
 
@@ -22,6 +23,13 @@ export class RunService {
   public constructor(
     private readonly runner: Runner,
     private readonly repository: AppRepository,
+    private readonly workspaceRoots: {
+      readonly savedDagRuns: string;
+      readonly standaloneConversations: string;
+    } = {
+      savedDagRuns: join(runner.workspacePath, 'projects', '_runs'),
+      standaloneConversations: join(runner.workspacePath, 'standalone'),
+    },
   ) {}
 
   public async start(input: {
@@ -67,7 +75,8 @@ export class RunService {
         resolveStarted,
         rejectStarted,
         prepared.conversationRevision,
-        prepared.workspacePath,
+        input.savedDagId === undefined ? prepared.workspacePath : undefined,
+        input.savedDagId === undefined ? undefined : this.workspaceRoots.savedDagRuns,
       ),
     );
     return started;
@@ -170,6 +179,7 @@ export class RunService {
     rejectStarted: (error: unknown) => void,
     conversationRevision?: number,
     workspacePath?: string,
+    workspaceRoot?: string,
   ): Promise<void> {
     let runId: RunId | undefined;
     let checkpoint: RunCheckpoint | undefined;
@@ -178,7 +188,11 @@ export class RunService {
       for await (const event of this.runner.stream(
         target,
         input,
-        workspacePath === undefined ? {} : { workspacePath },
+        workspacePath !== undefined
+          ? { workspacePath }
+          : workspaceRoot === undefined
+            ? {}
+            : { workspaceRoot },
       )) {
         if (runId === undefined) {
           const startedRunId = event.runId;
@@ -237,10 +251,10 @@ export class RunService {
     if (stored === undefined) {
       throw new Error(`Conversation '${conversationId}' was not found.`);
     }
-    const project = await this.repository.getProject(stored.projectId);
-    if (project === undefined) {
-      throw new Error(`Project '${stored.projectId}' was not found.`);
-    }
+    const workspacePath =
+      stored.workspaceScope === 'standalone'
+        ? join(this.workspaceRoots.standaloneConversations, stored.id, 'workspace')
+        : await this.#projectWorkspace(stored.projectId);
     return {
       input:
         'prompt' in input
@@ -250,8 +264,17 @@ export class RunService {
             }
           : input,
       ...('prompt' in input ? { conversationRevision: stored.revision } : {}),
-      workspacePath: project.rootPath,
+      workspacePath,
     };
+  }
+
+  async #projectWorkspace(projectId: string | undefined): Promise<string> {
+    if (projectId === undefined) {
+      throw new Error('Project-scoped conversation has no project id.');
+    }
+    const project = await this.repository.getProject(projectId);
+    if (project === undefined) throw new Error(`Project '${projectId}' was not found.`);
+    return project.rootPath;
   }
 
   #publish(event: RunEvent): void {

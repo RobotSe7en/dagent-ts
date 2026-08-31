@@ -78,6 +78,12 @@ const reviewer = defineToolAgent({
 qualified name, or a short name when it is unambiguous. Skill scope does not automatically grant
 file, shell, or network tools.
 
+ToolAgent system prompts include a deterministic routing index for the resolved scope. Sorted
+name/description entries use an 8,000-character budget, then name-only entries use a separate
+2,000-character budget. If entries remain, the prompt gives an omitted count and directs the model
+to `skill.list`. Full `SKILL.md` bodies stay on demand through `skill.view`; the dynamic DAG planner
+does not receive this business-Skill index.
+
 ## SkillStore
 
 ```ts

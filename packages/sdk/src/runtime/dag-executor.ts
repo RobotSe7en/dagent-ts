@@ -1,13 +1,15 @@
 import type {
   ArtifactStates,
+  ArtifactFileManifest,
   ArtifactUpload,
   CapabilityInvocation,
   ContentReference,
   DAGSpec,
   DagNode,
   DagNodeResult,
-  JsonObject,
   JsonValue,
+  ConversationState,
+  PendingReview,
 } from '../contracts/index.js';
 import {
   createInvocationId,
@@ -18,6 +20,7 @@ import {
 import { DagentError, errorMessage, throwIfAborted } from '../errors.js';
 import { evaluateCondition, resolveBinding } from '../domain/value-resolver.js';
 import { assertValidDag } from '../domain/dag-validation.js';
+import { validateDagInput } from '../domain/dag-input-validation.js';
 import {
   externalizeJsonValue,
   normalizeCapabilityResult,
@@ -27,10 +30,34 @@ import { ArtifactWorkspace } from './artifacts.js';
 import type { RuntimeExecutionContext } from './types.js';
 
 export type AgentNodeInvoker = (
+  nodeId: string,
   agentId: string,
   prompt: string,
   context: RuntimeExecutionContext,
-) => Promise<JsonValue>;
+) => Promise<AgentNodeOutcome>;
+
+export type AgentNodeOutcome =
+  | { readonly status: 'completed'; readonly output: JsonValue }
+  | {
+      readonly status: 'awaiting-review';
+      readonly conversation: ConversationState;
+      readonly review: PendingReview;
+    };
+
+export class StaticAgentReviewPause extends Error {
+  public nodeResults: Readonly<Record<string, DagNodeResult>> = {};
+  public artifactStates: ArtifactStates = {};
+
+  public constructor(
+    public readonly nodeId: string,
+    public readonly agentId: string,
+    public readonly conversation: ConversationState,
+    public readonly review: PendingReview,
+  ) {
+    super(`Static agent node '${nodeId}' requires capability review.`);
+    this.name = 'StaticAgentReviewPause';
+  }
+}
 
 export type DagExecutionResult = {
   readonly output: JsonValue;
@@ -53,19 +80,21 @@ export class DagExecutor {
   }
 
   public async execute(
-    graphInput: JsonObject,
+    graphInput: JsonValue,
     graphValue: DAGSpec,
     context: RuntimeExecutionContext,
     options: {
       readonly previousResults?: Readonly<Record<string, DagNodeResult>>;
       readonly previousArtifactStates?: ArtifactStates;
       readonly artifactUploads?: Readonly<Record<string, readonly ArtifactUpload[]>>;
+      readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
       readonly item?: JsonValue;
       readonly iteration?: number;
       readonly validated?: boolean;
     } = {},
   ): Promise<DagExecutionResult> {
     const graph = options.validated === true ? graphValue : assertValidDag(graphValue);
+    validateDagInput(graph, graphInput);
     const results: Record<string, DagNodeResult> = { ...options.previousResults };
     const nodeValues = await restoreNodeValues(results, context.workspacePath);
     const artifacts = await ArtifactWorkspace.open({
@@ -96,41 +125,59 @@ export class DagExecutor {
         });
       }
 
-      const batch = ready.slice(0, context.budget.limits.maxConcurrency);
-      const completed = await Promise.all(
-        batch.map(async (node) => {
-          const incoming = predecessors.get(node.id) ?? [];
-          const resolutionContext = {
-            graphInput,
-            nodeResults: results,
-            nodeValues,
-            graph,
-            workspacePath: context.workspacePath,
-            ...(options.item === undefined ? {} : { item: options.item }),
-            ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
-          };
-          const shouldSkip =
-            incoming.length > 0 &&
-            incoming.every((edge) => {
-              if (results[edge.from]?.status !== 'completed') return true;
-              return (
-                edge.condition !== undefined &&
-                !evaluateCondition(edge.condition, resolutionContext)
-              );
-            });
-          if (shouldSkip) {
-            return {
-              result: dagNodeResultSchema.parse({
-                nodeId: node.id,
-                status: 'skipped',
-                content: 'Conditional dependency was not satisfied.',
-                completedAt: nowTimestamp(),
-              }),
+      const readyAgent = ready.find(({ kind }) => kind === 'agent');
+      const batch =
+        readyAgent === undefined
+          ? ready.slice(0, context.budget.limits.maxConcurrency)
+          : [readyAgent];
+      let completed: ExecutedNode[];
+      try {
+        completed = await Promise.all(
+          batch.map(async (node) => {
+            const incoming = predecessors.get(node.id) ?? [];
+            const resolutionContext = {
+              graphInput,
+              nodeResults: results,
+              nodeValues,
+              graph,
+              workspacePath: context.workspacePath,
+              ...(options.inputArtifactFiles === undefined
+                ? {}
+                : { inputArtifactFiles: options.inputArtifactFiles }),
+              ...(options.item === undefined ? {} : { item: options.item }),
+              ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
             };
-          }
-          return this.#executeNode(node, graphInput, graph, results, nodeValues, context, options);
-        }),
-      );
+            const shouldSkip =
+              incoming.length > 0 &&
+              incoming.every((edge) => !isLiveEdge(edge, results, resolutionContext));
+            if (shouldSkip) {
+              return {
+                result: dagNodeResultSchema.parse({
+                  nodeId: node.id,
+                  status: 'skipped',
+                  content: 'Conditional dependency was not satisfied.',
+                  completedAt: nowTimestamp(),
+                }),
+              };
+            }
+            return this.#executeNode(
+              node,
+              graphInput,
+              graph,
+              results,
+              nodeValues,
+              context,
+              options,
+            );
+          }),
+        );
+      } catch (error) {
+        if (error instanceof StaticAgentReviewPause) {
+          error.nodeResults = { ...results };
+          error.artifactStates = artifacts.snapshot();
+        }
+        throw error;
+      }
       for (const executed of completed) {
         const { result } = executed;
         results[result.nodeId] = result;
@@ -170,6 +217,9 @@ export class DagExecutor {
             nodeValues,
             graph,
             workspacePath: context.workspacePath,
+            ...(options.inputArtifactFiles === undefined
+              ? {}
+              : { inputArtifactFiles: options.inputArtifactFiles }),
             ...(options.item === undefined ? {} : { item: options.item }),
             ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
           });
@@ -195,12 +245,16 @@ export class DagExecutor {
 
   async #executeNode(
     node: DagNode,
-    graphInput: JsonObject,
+    graphInput: JsonValue,
     graph: DAGSpec,
     results: Readonly<Record<string, DagNodeResult>>,
     nodeValues: Readonly<Record<string, JsonValue>>,
     context: RuntimeExecutionContext,
-    options: { readonly item?: JsonValue; readonly iteration?: number },
+    options: {
+      readonly item?: JsonValue;
+      readonly iteration?: number;
+      readonly inputArtifactFiles?: readonly ArtifactFileManifest[];
+    },
   ): Promise<ExecutedNode> {
     context.budget.reserveNodeExecution(context.signal);
     const startedAt = nowTimestamp();
@@ -211,6 +265,9 @@ export class DagExecutor {
       nodeValues,
       graph,
       workspacePath: context.workspacePath,
+      ...(options.inputArtifactFiles === undefined
+        ? {}
+        : { inputArtifactFiles: options.inputArtifactFiles }),
       ...(options.item === undefined ? {} : { item: options.item }),
       ...(options.iteration === undefined ? {} : { iteration: options.iteration }),
     };
@@ -220,6 +277,7 @@ export class DagExecutor {
       let valueReference: ContentReference | undefined;
       let references: ContentReference[] = [];
       let content = '';
+      let selectedBranch: string | undefined;
       switch (node.kind) {
         case 'capability': {
           const arguments_ = jsonObjectSchema.parse(
@@ -270,12 +328,21 @@ export class DagExecutor {
           const promptValue = resolveBinding(node.prompt, resolutionContext);
           const prompt =
             typeof promptValue === 'string' ? promptValue : JSON.stringify(promptValue);
-          output = await this.#invokeAgent(node.agentId, prompt, context);
+          const invoked = await this.#invokeAgent(node.id, node.agentId, prompt, context);
+          if (invoked.status === 'awaiting-review') {
+            throw new StaticAgentReviewPause(
+              node.id,
+              node.agentId,
+              invoked.conversation,
+              invoked.review,
+            );
+          }
+          output = invoked.output;
           content = typeof output === 'string' ? output : JSON.stringify(output);
           break;
         }
         case 'subgraph': {
-          const nestedInput = jsonObjectSchema.parse(resolveBinding(node.input, resolutionContext));
+          const nestedInput = resolveBinding(node.input, resolutionContext);
           const nested = await this.execute(nestedInput, node.graph, context, { validated: true });
           output = nested.output;
           content = typeof output === 'string' ? output : JSON.stringify(output);
@@ -306,7 +373,7 @@ export class DagExecutor {
           break;
         }
         case 'loop': {
-          let loopInput = jsonObjectSchema.parse(resolveBinding(node.input, resolutionContext));
+          let loopInput = resolveBinding(node.input, resolutionContext);
           let lastOutput: JsonValue = loopInput;
           for (let iteration = 0; iteration < node.maxIterations; iteration += 1) {
             const nested = await this.execute(loopInput, node.graph, context, {
@@ -327,10 +394,22 @@ export class DagExecutor {
             if (until) {
               break;
             }
-            loopInput = isJsonObject(lastOutput) ? lastOutput : { value: lastOutput };
+            loopInput = lastOutput;
           }
           output = lastOutput;
           content = typeof output === 'string' ? output : JSON.stringify(output);
+          break;
+        }
+        case 'condition': {
+          selectedBranch = node.defaultBranch;
+          for (const conditionCase of node.cases) {
+            if (evaluateCondition(conditionCase.when, resolutionContext)) {
+              selectedBranch = conditionCase.branch;
+              break;
+            }
+          }
+          output = { branch: selectedBranch };
+          content = JSON.stringify(output);
           break;
         }
       }
@@ -356,12 +435,14 @@ export class DagExecutor {
           ...(valueReference === undefined ? {} : { valueReference }),
           references,
           content,
+          ...(selectedBranch === undefined ? {} : { selectedBranch }),
           startedAt,
           completedAt: nowTimestamp(),
         }),
         value: output,
       };
     } catch (error) {
+      if (error instanceof StaticAgentReviewPause) throw error;
       return {
         result: dagNodeResultSchema.parse({
           nodeId: node.id,
@@ -377,6 +458,17 @@ export class DagExecutor {
 }
 
 type DagEdge = DAGSpec['edges'][number];
+
+function isLiveEdge(
+  edge: DagEdge,
+  results: Readonly<Record<string, DagNodeResult>>,
+  context: Parameters<typeof evaluateCondition>[1],
+): boolean {
+  const source = results[edge.from];
+  if (source?.status !== 'completed') return false;
+  if (edge.branch !== undefined) return source.selectedBranch === edge.branch;
+  return edge.condition === undefined || evaluateCondition(edge.condition, context);
+}
 
 function predecessorEdges(graph: DAGSpec): ReadonlyMap<string, readonly DagEdge[]> {
   const values = new Map<string, DagEdge[]>();
@@ -443,8 +535,4 @@ async function mapWithConcurrency<TInput, TOutput>(
   });
   await Promise.all(workers);
   return output;
-}
-
-function isJsonObject(value: JsonValue): value is JsonObject {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

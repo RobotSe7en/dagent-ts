@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 
 import { tool } from './capabilities/tool.js';
-import { DagBuilder } from './dag-builder.js';
+import { allOf, anyOf, DagBuilder, notCondition } from './dag-builder.js';
 
 const add = tool({
   id: 'tool.add',
@@ -162,6 +162,47 @@ describe('DagBuilder', () => {
       kind: 'loop',
       maxIterations: 3,
     });
+  });
+
+  it('builds first-class condition nodes and branch edges with composable conditions', () => {
+    const builder = new DagBuilder({ id: 'condition_root', name: 'Condition root' });
+    const score = builder.capability(add, { left: 1, right: 2 }, { id: 'score' });
+    const passing = {
+      operator: 'gte' as const,
+      left: score.output().toBinding(),
+      right: 3,
+    };
+    const route = builder.condition(
+      [
+        {
+          branch: 'publish',
+          when: allOf(
+            passing,
+            anyOf(passing, { operator: 'eq', left: score.output().toBinding(), right: 4 }),
+            notCondition({ operator: 'lt', left: score.output().toBinding(), right: 3 }),
+          ),
+        },
+      ],
+      'revise',
+      { id: 'route', after: [score] },
+    );
+    const publish = builder.capability(add, { left: 1, right: 1 }, { id: 'publish' });
+    const revise = builder.capability(add, { left: 2, right: 2 }, { id: 'revise' });
+    builder.addEdge(route, publish, { branch: 'publish' });
+    builder.addEdge(route, revise, { branch: 'revise' });
+    builder.setOutput(route.output('branch'));
+
+    const graph = builder.build();
+
+    expect(graph.nodes.find(({ id }) => id === 'route')).toMatchObject({
+      kind: 'condition',
+      defaultBranch: 'revise',
+    });
+    expect(graph.edges).toEqual([
+      { from: 'score', to: 'route' },
+      { from: 'route', to: 'publish', branch: 'publish' },
+      { from: 'route', to: 'revise', branch: 'revise' },
+    ]);
   });
 
   it('prevents scoped references from being created in the wrong builder', () => {
